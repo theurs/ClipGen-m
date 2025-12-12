@@ -12,33 +12,38 @@ import (
 	"golang.design/x/hotkey"
 )
 
+// Карты раскладок
+const (
+	enLayout = "`1234567890-=qwertyuiop[]\\asdfghjkl;'zxcvbnm,./~!@#$%^&*()_+QWERTYUIOP{}|ASDFGHJKL:\"ZXCVBNM<>?"
+	ruLayout = "ё1234567890-=йцукенгшщзхъ\\фывапролджэячсмитьбю.Ё!\"№;%:?*()_+ЙЦУКЕНГШЩЗХЪ/ФЫВАПРОЛДЖЭЯЧСМИТЬБЮ,"
+
+	// Код клавиши Pause/Break в Windows = 19
+	// Мы приводим его к типу hotkey.Key, который требует библиотека
+	KeyPause = hotkey.Key(19)
+)
+
 func main() {
-	// Основной цикл UI (трея) блокирует поток, поэтому хоткеи будем запускать внутри
 	systray.Run(onReady, onExit)
 }
 
 func onReady() {
 	setupTray()
-
-	// Запускаем прослушку хоткеев в отдельной горутине
 	go listenHotkeys()
 }
 
 func onExit() {
-	fmt.Println("Выход из приложения...")
+	fmt.Println("Выход...")
 }
 
-// Настройка трея (иконка и меню)
 func setupTray() {
 	iconData, err := os.ReadFile("icon.ico")
 	if err == nil {
 		systray.SetIcon(iconData)
 	} else {
-		systray.SetTitle("ClipGen")
+		systray.SetTitle("CG")
 	}
-
 	systray.SetTitle("ClipGen-m")
-	systray.SetTooltip("ClipGen-m: Ctrl+F1 для апперкейса")
+	systray.SetTooltip("Ctrl+F1: UpCase\nPause: Смена раскладки")
 
 	mQuit := systray.AddMenuItem("Выход", "Закрыть приложение")
 	go func() {
@@ -47,92 +52,118 @@ func setupTray() {
 	}()
 }
 
-// Слушаем глобальные горячие клавиши
 func listenHotkeys() {
-	// Регистрируем Ctrl + F1
-	// ModCtrl = Ctrl, KeyF1 = F1
-	hk := hotkey.New([]hotkey.Modifier{hotkey.ModCtrl}, hotkey.KeyF1)
-
-	err := hk.Register()
-	if err != nil {
-		fmt.Printf("Ошибка регистрации хоткея: %v\n", err)
-		return
+	// 1. Хоткей Uppercase (Ctrl + F1)
+	hkUpper := hotkey.New([]hotkey.Modifier{hotkey.ModCtrl}, hotkey.KeyF1)
+	if err := hkUpper.Register(); err != nil {
+		fmt.Println("Ошибка регистрации Ctrl+F1:", err)
+	} else {
+		defer hkUpper.Unregister()
 	}
 
-	// Удаляем хоткей при завершении функции (обычно при выходе из программы)
-	defer hk.Unregister()
+	// 2. Хоткей Pause (Исправлено)
+	// Используем нашу константу KeyPause (код 19)
+	hkSwitch := hotkey.New(nil, KeyPause)
+	if err := hkSwitch.Register(); err != nil {
+		fmt.Println("Ошибка регистрации Pause:", err)
+	} else {
+		defer hkSwitch.Unregister()
+	}
 
-	fmt.Println("Хоткей Ctrl+F1 зарегистрирован. Выдели текст и нажми!")
+	fmt.Println("Слушаем: Ctrl+F1 и Pause")
 
-	// Бесконечный цикл ожидания нажатия
 	for {
-		// Ждем события нажатия
-		<-hk.Keydown()
+		select {
+		case <-hkUpper.Keydown():
+			fmt.Println("Нажат Ctrl+F1")
+			processSelection(strings.ToUpper)
+			<-hkUpper.Keyup()
 
-		fmt.Println("Хоткей нажат! Обрабатываем...")
-		handleClipGenAction()
-
-		// Ждем события отпускания (чтобы не спамило, если зажать)
-		<-hk.Keyup()
+		case <-hkSwitch.Keydown():
+			fmt.Println("Нажат Pause")
+			processSelection(switcherLogic)
+			<-hkSwitch.Keyup()
+		}
 	}
 }
 
-// Логика: Копировать -> Обработать -> Вставить
-func handleClipGenAction() {
-	// 1. Инициализируем эмулятор клавиатуры
+func processSelection(modifierFunc func(string) string) {
 	kb, err := keybd_event.NewKeyBonding()
 	if err != nil {
-		fmt.Println("Ошибка клавиатуры:", err)
 		return
 	}
 
-	// Для Windows часто нужно небольшое ожидание, чтобы клавиши "Ctrl+F1" физически успели отжаться
-	// иначе они могут смешаться с нашими эмулируемыми Ctrl+C
-	time.Sleep(100 * time.Millisecond)
+	// Небольшая задержка, чтобы физическая клавиша Pause успела отжаться
+	time.Sleep(200 * time.Millisecond)
 
-	// --- ЭТАП 1: КОПИРОВАНИЕ (Ctrl+C) ---
-	// Очистим буфер перед копированием, чтобы убедиться, что мы взяли именно новый текст
-	// (хотя это не обязательно, но полезно для отладки)
 	clipboard.WriteAll("")
 
-	kb.SetKeys(keybd_event.VK_C) // Клавиша C
-	kb.HasCTRL(true)             // Зажат Ctrl
+	// Ctrl+C
+	kb.SetKeys(keybd_event.VK_C)
+	kb.HasCTRL(true)
+	kb.Launching()
+	kb.HasCTRL(false)
 
-	// Нажимаем
-	err = kb.Launching()
-	if err != nil {
-		fmt.Println("Не удалось нажать Ctrl+C")
-		return
-	}
-
-	// Ждем, пока ОС скопирует текст в буфер (это не мгновенно!)
 	time.Sleep(100 * time.Millisecond)
 
-	// --- ЭТАП 2: ЧТЕНИЕ И ОБРАБОТКА ---
 	text, err := clipboard.ReadAll()
 	if err != nil || text == "" {
-		fmt.Println("Буфер пуст или ошибка чтения")
 		return
 	}
 
-	fmt.Printf("Исходный текст: %s\n", text)
-
-	// МАГИЯ ЗДЕСЬ: Делаем текст Uppercase
-	newText := strings.ToUpper(text)
-
-	// --- ЭТАП 3: ВСТАВКА (Ctrl+V) ---
-
-	// Записываем измененный текст в буфер
-	clipboard.WriteAll(newText)
-
-	// Эмулируем Ctrl+V
-	kb.SetKeys(keybd_event.VK_V) // Клавиша V
-	kb.HasCTRL(true)             // Зажат Ctrl
-
-	err = kb.Launching()
-	if err != nil {
-		fmt.Println("Не удалось нажать Ctrl+V")
+	newText := modifierFunc(text)
+	if newText == text {
+		return
 	}
 
-	fmt.Println("Готово!")
+	clipboard.WriteAll(newText)
+
+	// Ctrl+V
+	kb.SetKeys(keybd_event.VK_V)
+	kb.HasCTRL(true)
+	kb.Launching()
+	kb.HasCTRL(false)
+}
+
+func switcherLogic(input string) string {
+	var ruCount, enCount int
+
+	for _, r := range input {
+		if strings.ContainsRune(ruLayout, r) {
+			ruCount++
+		} else if strings.ContainsRune(enLayout, r) {
+			enCount++
+		}
+	}
+
+	if ruCount == 0 && enCount == 0 {
+		return input
+	}
+
+	toRu := enCount > ruCount
+
+	var sb strings.Builder
+	for _, r := range input {
+		converted := r
+		if toRu {
+			idx := strings.IndexRune(enLayout, r)
+			if idx != -1 {
+				runes := []rune(ruLayout)
+				if idx < len(runes) {
+					converted = runes[idx]
+				}
+			}
+		} else {
+			idx := strings.IndexRune(ruLayout, r)
+			if idx != -1 {
+				runes := []rune(enLayout)
+				if idx < len(runes) {
+					converted = runes[idx]
+				}
+			}
+		}
+		sb.WriteRune(converted)
+	}
+
+	return sb.String()
 }
