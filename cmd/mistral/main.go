@@ -25,6 +25,7 @@ const (
 	ConfigDirName  = "clipgen-m"
 	ConfigFileName = "mistral.conf"
 	LogFileName    = "err.log"
+	MaxLogSize     = 10 * 1024 * 1024 // 10 MB
 	BaseURL        = "https://api.mistral.ai"
 )
 
@@ -32,8 +33,8 @@ const (
 var (
 	ModelsGeneral = []string{"mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"}
 	ModelsCode    = []string{"devstral-2512", "codestral-latest", "labs-devstral-small-2512"}
-	ModelsVision  = []string{"pixtral-12b-2409", "mistral-large-latest"}
-	ModelAudio    = "voxtral-mini-latest" // Теперь работает через Chat API
+	ModelsVision  = []string{"mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"}
+	ModelAudio    = "voxtral-mini-latest"
 	ModelOCR      = "mistral-ocr-latest"
 )
 
@@ -45,19 +46,18 @@ type Config struct {
 
 type ChatMessage struct {
 	Role    string      `json:"role"`
-	Content interface{} `json:"content"` // string или []ContentPart
+	Content interface{} `json:"content"`
 }
 
-// ContentPart обновлен для поддержки Аудио (по примеру из curl)
 type ContentPart struct {
-	Type     string `json:"type"` // "text", "image_url", "input_audio"
+	Type     string `json:"type"`
 	Text     string `json:"text,omitempty"`
 	ImageUrl *struct {
 		Url string `json:"url"`
 	} `json:"image_url,omitempty"`
 	InputAudio *struct {
-		Data   string `json:"data"`   // Base64 string
-		Format string `json:"format"` // mp3, wav, etc
+		Data   string `json:"data"`
+		Format string `json:"format"`
 	} `json:"input_audio,omitempty"`
 }
 
@@ -85,8 +85,8 @@ type ChatResponse struct {
 type OCRRequest struct {
 	Model    string `json:"model"`
 	Document struct {
-		Type        string `json:"type"`                   // "document_url"
-		DocumentUrl string `json:"document_url,omitempty"` // data:application/pdf;base64,...
+		Type        string `json:"type"`
+		DocumentUrl string `json:"document_url,omitempty"`
 	} `json:"document"`
 }
 
@@ -168,6 +168,12 @@ func main() {
 
 	// 3. Определение режима
 	mode := determineMode(flagMode, userPrompt, hasImages, hasAudio, hasPdf)
+
+	// Предупреждение о смешивании форматов
+	if hasImages && hasAudio {
+		logVerbose("ВНИМАНИЕ: Вы отправляете и изображения, и аудио. Текущие модели Mistral могут не поддерживать оба формата одновременно.")
+	}
+
 	modelsList := selectModelList(mode)
 
 	if flagJson {
@@ -201,34 +207,43 @@ func main() {
 					errReq = fmt.Errorf("ocr mode requires a file")
 				}
 			default:
-				// Теперь Audio тоже идет через requestChat (Multimodal)
 				result, errReq = requestChat(apiKey, modelName, flagSystem, userPrompt, filesData, flagTemp, flagJson)
 			}
 
 			if errReq == nil {
+				// Успех
 				printOutput(result, flagJson)
 				return
 			}
 
+			// Обработка ошибок
 			lastErr = errReq
 			logVerbose("Ошибка: %v", errReq)
 
 			errMsg := errReq.Error()
+
 			if strings.Contains(errMsg, "401") {
+				// Ошибка авторизации: меняем ключ сразу, без паузы
 				usedKeys[apiKey] = true
 				logVerbose("Ключ невалиден, пробуем другой...")
 				keyAttempts++
 				continue
+
 			} else if strings.Contains(errMsg, "429") || strings.Contains(errMsg, "500") || strings.Contains(errMsg, "503") {
+				// Ошибка лимитов или сервера: ДЕЛАЕМ ПАУЗУ
+				logVerbose("Сервер перегружен или лимит. Ждем 2 сек перед повтором...")
+				time.Sleep(2 * time.Second)
+
 				if keyAttempts < maxKeyAttempts-1 {
 					keyAttempts++
-					logVerbose("Rate limit/Server Error, пробуем другой ключ...")
+					logVerbose("Пробуем другой ключ...")
 					continue
 				} else {
 					logVerbose("Все ключи исчерпаны для этой модели, пробуем следующую модель...")
 					break
 				}
 			} else {
+				// Критическая ошибка (например 400 Bad Request) - нет смысла повторять
 				fatal("Критическая ошибка API: %v", errReq)
 			}
 		}
@@ -246,27 +261,17 @@ func requestChat(apiKey, model, systemPrompt, userText string, files []FileData,
 		{Role: "system", Content: systemPrompt},
 	}
 
-	// Формирование контента пользователя
 	var content interface{}
-	// Если нет файлов, отправляем просто строку (экономия токенов/формат)
 	if len(files) == 0 {
 		content = userText
 	} else {
-		// Если есть файлы, собираем массив ContentPart
 		parts := []ContentPart{}
-
-		// Если есть текст, добавляем его первым
 		if userText != "" {
 			parts = append(parts, ContentPart{Type: "text", Text: userText})
-		} else if len(files) > 0 {
-			// Если текста нет, но есть файлы, можно добавить дефолтную просьбу,
-			// но для аудио часто нужно "transcribe this" по умолчанию, если пусто.
-			// Оставим пустым, пусть модель решает.
 		}
 
 		for _, f := range files {
 			if strings.HasPrefix(f.MimeType, "image/") {
-				// Обработка картинок
 				parts = append(parts, ContentPart{
 					Type: "image_url",
 					ImageUrl: &struct {
@@ -276,25 +281,21 @@ func requestChat(apiKey, model, systemPrompt, userText string, files []FileData,
 					},
 				})
 			} else if strings.HasPrefix(f.MimeType, "audio/") {
-				// Обработка Аудио (Voxtral Chat)
-				// Формат: mp3, wav, ogg, flac. Берем из mime или расширения
-				format := "mp3" // дефолт
+				format := "mp3"
 				if strings.Contains(f.MimeType, "wav") {
 					format = "wav"
 				}
-				// Mistral Chat API ожидает структуру input_audio: { data: "BASE64", format: "mp3" }
 				parts = append(parts, ContentPart{
 					Type: "input_audio",
 					InputAudio: &struct {
 						Data   string `json:"data"`
 						Format string `json:"format"`
 					}{
-						Data:   f.Base64Content, // Здесь нужен чистый base64 без "data:audio..." заголовка
+						Data:   f.Base64Content,
 						Format: format,
 					},
 				})
 			} else if strings.HasPrefix(f.MimeType, "text/") || f.MimeType == "application/json" {
-				// Текстовые файлы (код, логи)
 				textBytes, _ := base64.StdEncoding.DecodeString(f.Base64Content)
 				parts = append(parts, ContentPart{
 					Type: "text",
@@ -383,7 +384,6 @@ func doHttp(apiKey, url, contentType string, body []byte) ([]byte, error) {
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Accept", "application/json")
 
-	// Увеличенный таймаут для загрузки файлов
 	client := &http.Client{Timeout: 300 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -581,7 +581,7 @@ func selectModelList(mode string) []string {
 	case "code":
 		return ModelsCode
 	case "audio":
-		return []string{ModelAudio} // теперь это Chat модель
+		return []string{ModelAudio}
 	case "ocr":
 		return []string{ModelOCR}
 	case "vision":
@@ -591,7 +591,7 @@ func selectModelList(mode string) []string {
 	}
 }
 
-// --- Хелперы ввода/вывода ---
+// --- Хелперы ввода/вывода и Логирование ---
 
 func readStdin() string {
 	stat, _ := os.Stdin.Stat()
@@ -632,11 +632,40 @@ func printOutput(text string, jsonMode bool) {
 	fmt.Println(text)
 }
 
+// rotateLog проверяет размер файла и делает ротацию при необходимости
+func rotateLog(logPath string) {
+	fi, err := os.Stat(logPath)
+	if err != nil {
+		// Файла нет или ошибка доступа - ротация не нужна
+		return
+	}
+
+	if fi.Size() > MaxLogSize {
+		// Файл слишком большой.
+		// 1. Удаляем старый бэкап
+		backupPath := logPath + ".old"
+		_ = os.Remove(backupPath)
+
+		// 2. Переименовываем текущий лог в бэкап
+		// В Windows переименование не сработает, если целевой файл существует,
+		// поэтому удаление выше обязательно.
+		err := os.Rename(logPath, backupPath)
+		if err != nil {
+			// Если не вышло (например, файл занят), просто игнорируем,
+			// будем писать дальше в конец большого файла.
+			// Критично не падать здесь.
+		}
+	}
+}
+
 func appendLog(level, format string, v ...interface{}) {
 	logPath := getLogFilePath()
 	if logPath == "" {
 		return
 	}
+
+	// Проверяем ротацию ПЕРЕД открытием файла
+	rotateLog(logPath)
 
 	msg := fmt.Sprintf(format, v...)
 	timestamp := time.Now().Format("2006/01/02 15:04:05")
