@@ -3,7 +3,6 @@ module ClipGen-m
 go 1.25.3
 
 require (
-	github.com/atotto/clipboard v0.1.4
 	github.com/getlantern/systray v1.2.2
 	github.com/micmonay/keybd_event v1.1.2
 	golang.design/x/hotkey v0.4.1
@@ -18,6 +17,11 @@ require (
 	github.com/getlantern/ops v0.0.0-20190325191751-d70cb0d6f85f // indirect
 	github.com/go-stack/stack v1.8.0 // indirect
 	github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c // indirect
-	golang.org/x/sys v0.1.0 // indirect
+	golang.design/x/clipboard v0.7.1 // indirect
+	golang.org/x/exp/shiny v0.0.0-20250606033433-dcc06ee1d476 // indirect
+	golang.org/x/image v0.34.0 // indirect
+	golang.org/x/mobile v0.0.0-20250606033058-a2a15c67f36f // indirect
+	golang.org/x/sys v0.33.0 // indirect
 	golang.org/x/text v0.32.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
