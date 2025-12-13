@@ -73,7 +73,7 @@ mistral.exe -m ocr -f "C:\Docs\contract.pdf"
 ### 5. Транскрибация аудио
 Преобразование голоса в текст.
 ```powershell
-mistral.exe -f "C:\Voice\meeting_notes.mp3"
+echo "в ответе должен быть только текст транскрипции, без технических сообщений типа вот текст транскрипции" | mistral.exe -f "C:\Voice\meeting_notes.mp3"
 ```
 
 ### 6. Анализ нескольких файлов

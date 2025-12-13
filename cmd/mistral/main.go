@@ -9,7 +9,6 @@ import (
 	"io"
 	"math/rand"
 	"mime"
-	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -29,12 +28,12 @@ const (
 	BaseURL        = "https://api.mistral.ai"
 )
 
-// Списки моделей для фоллбека (от лучшей к простой)
+// Списки моделей
 var (
 	ModelsGeneral = []string{"mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"}
 	ModelsCode    = []string{"devstral-2512", "codestral-latest", "labs-devstral-small-2512"}
 	ModelsVision  = []string{"pixtral-12b-2409", "mistral-large-latest"}
-	ModelAudio    = "voxtral-mini-latest"
+	ModelAudio    = "voxtral-mini-latest" // Теперь работает через Chat API
 	ModelOCR      = "mistral-ocr-latest"
 )
 
@@ -49,12 +48,17 @@ type ChatMessage struct {
 	Content interface{} `json:"content"` // string или []ContentPart
 }
 
+// ContentPart обновлен для поддержки Аудио (по примеру из curl)
 type ContentPart struct {
-	Type     string `json:"type"`
+	Type     string `json:"type"` // "text", "image_url", "input_audio"
 	Text     string `json:"text,omitempty"`
 	ImageUrl *struct {
 		Url string `json:"url"`
 	} `json:"image_url,omitempty"`
+	InputAudio *struct {
+		Data   string `json:"data"`   // Base64 string
+		Format string `json:"format"` // mp3, wav, etc
+	} `json:"input_audio,omitempty"`
 }
 
 type ChatRequest struct {
@@ -78,14 +82,12 @@ type ChatResponse struct {
 	} `json:"error,omitempty"`
 }
 
-// OCRRequest - исправленная структура под curl пример
 type OCRRequest struct {
 	Model    string `json:"model"`
 	Document struct {
 		Type        string `json:"type"`                   // "document_url"
 		DocumentUrl string `json:"document_url,omitempty"` // data:application/pdf;base64,...
 	} `json:"document"`
-	IncludeImageBase64 bool `json:"include_image_base64,omitempty"`
 }
 
 type OCRResponse struct {
@@ -139,7 +141,6 @@ func main() {
 		fatal("Ошибка получения пути конфига: %v", err)
 	}
 
-	// Режим сохранения ключа
 	if flagSaveKey != "" {
 		if err := addKeyToConfig(configPath, flagSaveKey); err != nil {
 			fatal("Ошибка сохранения ключа: %v", err)
@@ -148,7 +149,6 @@ func main() {
 		return
 	}
 
-	// Загрузка конфига
 	config, err := loadConfig(configPath)
 	if err != nil {
 		fatal("Ошибка загрузки конфига: %v", err)
@@ -158,24 +158,23 @@ func main() {
 		fatal("Нет API ключей. Запустите: mistral.exe -save-key ВАШ_КЛЮЧ")
 	}
 
-	// 2. Чтение входных данных (STDIN + Файлы)
+	// 2. Чтение входных данных
 	userPrompt := readStdin()
 	filesData, hasImages, hasAudio, hasPdf := processFiles(flagFiles)
 
 	if userPrompt == "" && len(filesData) == 0 {
-		fatal("Нет входных данных (ни текста в stdin, ни файлов)")
+		fatal("Нет входных данных")
 	}
 
-	// 3. Определение режима и моделей
+	// 3. Определение режима
 	mode := determineMode(flagMode, userPrompt, hasImages, hasAudio, hasPdf)
 	modelsList := selectModelList(mode)
 
-	// Доработка промпта для JSON
 	if flagJson {
 		userPrompt += "\nIMPORTANT: Output strictly in JSON format."
 	}
 
-	// 4. Цикл запросов (Retry / Fallback / Key Rotation)
+	// 4. Цикл запросов
 	var lastErr error
 	usedKeys := make(map[string]bool)
 
@@ -183,7 +182,6 @@ func main() {
 		keyAttempts := 0
 		maxKeyAttempts := len(config.ApiKeys)
 
-		// Пытаемся перебирать ключи для текущей модели
 		for keyAttempts < maxKeyAttempts {
 			apiKey := getRandomKey(config.ApiKeys, usedKeys)
 			if apiKey == "" {
@@ -196,56 +194,41 @@ func main() {
 			var errReq error
 
 			switch mode {
-			case "audio":
-				// Для аудио берем первый подходящий файл
-				if len(filesData) > 0 {
-					result, errReq = requestAudio(apiKey, modelName, filesData[0].Path)
-				} else {
-					errReq = fmt.Errorf("audio mode requires an audio file")
-				}
 			case "ocr":
-				// Для OCR берем первый файл
 				if len(filesData) > 0 {
 					result, errReq = requestOCR(apiKey, modelName, filesData[0])
 				} else {
 					errReq = fmt.Errorf("ocr mode requires a file")
 				}
 			default:
-				// Text, Code, Vision
+				// Теперь Audio тоже идет через requestChat (Multimodal)
 				result, errReq = requestChat(apiKey, modelName, flagSystem, userPrompt, filesData, flagTemp, flagJson)
 			}
 
 			if errReq == nil {
-				// УСПЕХ
 				printOutput(result, flagJson)
 				return
 			}
 
-			// Обработка ошибок
 			lastErr = errReq
 			logVerbose("Ошибка: %v", errReq)
 
 			errMsg := errReq.Error()
 			if strings.Contains(errMsg, "401") {
-				// Ключ плохой - помечаем и пробуем следующий
 				usedKeys[apiKey] = true
 				logVerbose("Ключ невалиден, пробуем другой...")
 				keyAttempts++
 				continue
 			} else if strings.Contains(errMsg, "429") || strings.Contains(errMsg, "500") || strings.Contains(errMsg, "503") {
-				// Rate Limit или Server Error
-				// Сначала пробуем сменить ключ (может лимит на аккаунт)
 				if keyAttempts < maxKeyAttempts-1 {
 					keyAttempts++
 					logVerbose("Rate limit/Server Error, пробуем другой ключ...")
 					continue
 				} else {
-					// Ключи кончились, выходим из цикла ключей -> переходим к следующей модели
 					logVerbose("Все ключи исчерпаны для этой модели, пробуем следующую модель...")
 					break
 				}
 			} else {
-				// Неисправимая ошибка (например 400 Bad Request)
 				fatal("Критическая ошибка API: %v", errReq)
 			}
 		}
@@ -263,16 +246,27 @@ func requestChat(apiKey, model, systemPrompt, userText string, files []FileData,
 		{Role: "system", Content: systemPrompt},
 	}
 
+	// Формирование контента пользователя
 	var content interface{}
+	// Если нет файлов, отправляем просто строку (экономия токенов/формат)
 	if len(files) == 0 {
 		content = userText
 	} else {
+		// Если есть файлы, собираем массив ContentPart
 		parts := []ContentPart{}
+
+		// Если есть текст, добавляем его первым
 		if userText != "" {
 			parts = append(parts, ContentPart{Type: "text", Text: userText})
+		} else if len(files) > 0 {
+			// Если текста нет, но есть файлы, можно добавить дефолтную просьбу,
+			// но для аудио часто нужно "transcribe this" по умолчанию, если пусто.
+			// Оставим пустым, пусть модель решает.
 		}
+
 		for _, f := range files {
 			if strings.HasPrefix(f.MimeType, "image/") {
+				// Обработка картинок
 				parts = append(parts, ContentPart{
 					Type: "image_url",
 					ImageUrl: &struct {
@@ -281,8 +275,26 @@ func requestChat(apiKey, model, systemPrompt, userText string, files []FileData,
 						Url: fmt.Sprintf("data:%s;base64,%s", f.MimeType, f.Base64Content),
 					},
 				})
+			} else if strings.HasPrefix(f.MimeType, "audio/") {
+				// Обработка Аудио (Voxtral Chat)
+				// Формат: mp3, wav, ogg, flac. Берем из mime или расширения
+				format := "mp3" // дефолт
+				if strings.Contains(f.MimeType, "wav") {
+					format = "wav"
+				}
+				// Mistral Chat API ожидает структуру input_audio: { data: "BASE64", format: "mp3" }
+				parts = append(parts, ContentPart{
+					Type: "input_audio",
+					InputAudio: &struct {
+						Data   string `json:"data"`
+						Format string `json:"format"`
+					}{
+						Data:   f.Base64Content, // Здесь нужен чистый base64 без "data:audio..." заголовка
+						Format: format,
+					},
+				})
 			} else if strings.HasPrefix(f.MimeType, "text/") || f.MimeType == "application/json" {
-				// Текстовые файлы читаем и вставляем в промпт
+				// Текстовые файлы (код, логи)
 				textBytes, _ := base64.StdEncoding.DecodeString(f.Base64Content)
 				parts = append(parts, ContentPart{
 					Type: "text",
@@ -327,52 +339,6 @@ func requestChat(apiKey, model, systemPrompt, userText string, files []FileData,
 	return resp.Choices[0].Message.Content, nil
 }
 
-func requestAudio(apiKey, model, filePath string) (string, error) {
-	url := BaseURL + "/v1/audio/transcriptions"
-
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-
-	file, err := os.Open(filePath)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
-	part, err := writer.CreateFormFile("file", filepath.Base(filePath))
-	if err != nil {
-		return "", err
-	}
-	_, err = io.Copy(part, file)
-	if err != nil {
-		return "", err
-	}
-
-	writer.WriteField("model", model)
-	writer.Close()
-
-	respBytes, err := doHttp(apiKey, url, writer.FormDataContentType(), body.Bytes())
-	if err != nil {
-		return "", err
-	}
-
-	var result struct {
-		Text  string `json:"text"`
-		Error *struct {
-			Message string `json:"message"`
-		} `json:"error,omitempty"`
-	}
-	if err := json.Unmarshal(respBytes, &result); err != nil {
-		return "", err
-	}
-	if result.Error != nil {
-		return "", fmt.Errorf("api error: %s", result.Error.Message)
-	}
-
-	return result.Text, nil
-}
-
-// requestOCR - обновленная функция с правильным JSON payload
 func requestOCR(apiKey, model string, file FileData) (string, error) {
 	url := BaseURL + "/v1/ocr"
 
@@ -380,15 +346,9 @@ func requestOCR(apiKey, model string, file FileData) (string, error) {
 		Model: model,
 	}
 
-	// Mistral OCR использует тип "document_url" и ожидает поле "document_url"
 	reqBody.Document.Type = "document_url"
-
-	// Формируем data URI
 	base64Full := fmt.Sprintf("data:%s;base64,%s", file.MimeType, file.Base64Content)
 	reqBody.Document.DocumentUrl = base64Full
-
-	// Опционально, чтобы соответствовать примеру (хотя для текста не обязательно)
-	// reqBody.IncludeImageBase64 = true
 
 	jsonData, _ := json.Marshal(reqBody)
 	respBytes, err := doHttp(apiKey, url, "application/json", jsonData)
@@ -398,8 +358,7 @@ func requestOCR(apiKey, model string, file FileData) (string, error) {
 
 	var resp OCRResponse
 	if err := json.Unmarshal(respBytes, &resp); err != nil {
-		// Если json битый, попробуем вернуть тело ошибки
-		return "", fmt.Errorf("json parse error: %v | Body: %s", err, string(respBytes))
+		return "", err
 	}
 	if resp.Error != nil {
 		return "", fmt.Errorf("ocr api error: %s", resp.Error.Message)
@@ -424,8 +383,8 @@ func doHttp(apiKey, url, contentType string, body []byte) ([]byte, error) {
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Accept", "application/json")
 
-	// Увеличенный таймаут для больших файлов (OCR и Vision могут думать долго)
-	client := &http.Client{Timeout: 180 * time.Second}
+	// Увеличенный таймаут для загрузки файлов
+	client := &http.Client{Timeout: 300 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -500,7 +459,6 @@ func loadConfig(path string) (*Config, error) {
 
 func addKeyToConfig(path, key string) error {
 	cfg, _ := loadConfig(path)
-	// Добавляем только если такого ключа еще нет
 	exists := false
 	for _, k := range cfg.ApiKeys {
 		if k == key {
@@ -623,7 +581,7 @@ func selectModelList(mode string) []string {
 	case "code":
 		return ModelsCode
 	case "audio":
-		return []string{ModelAudio}
+		return []string{ModelAudio} // теперь это Chat модель
 	case "ocr":
 		return []string{ModelOCR}
 	case "vision":
@@ -633,12 +591,12 @@ func selectModelList(mode string) []string {
 	}
 }
 
-// --- Хелперы ввода/вывода и логирования ---
+// --- Хелперы ввода/вывода ---
 
 func readStdin() string {
 	stat, _ := os.Stdin.Stat()
 	if (stat.Mode() & os.ModeCharDevice) != 0 {
-		return "" // Данных в пайпе нет
+		return ""
 	}
 
 	inputBytes, err := io.ReadAll(os.Stdin)
@@ -646,30 +604,25 @@ func readStdin() string {
 		return ""
 	}
 
-	// 1. Если это валидный UTF-8, оставляем как есть
 	if utf8.Valid(inputBytes) {
 		return strings.TrimSpace(string(inputBytes))
 	}
 
-	// 2. Если не UTF-8, пробуем CP866 (консоль Windows)
 	decoded, err := charmap.CodePage866.NewDecoder().Bytes(inputBytes)
 	if err == nil {
 		return strings.TrimSpace(string(decoded))
 	}
 
-	// 3. Пробуем Windows-1251
 	decoded1251, err := charmap.Windows1251.NewDecoder().Bytes(inputBytes)
 	if err == nil {
 		return strings.TrimSpace(string(decoded1251))
 	}
 
-	// Возвращаем как есть, если ничего не подошло
 	return strings.TrimSpace(string(inputBytes))
 }
 
 func printOutput(text string, jsonMode bool) {
 	if jsonMode {
-		// Очистка markdown блоков для чистого JSON
 		text = strings.TrimSpace(text)
 		text = strings.TrimPrefix(text, "```json")
 		text = strings.TrimPrefix(text, "```")
