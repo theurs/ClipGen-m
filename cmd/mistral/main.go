@@ -31,9 +31,9 @@ const (
 
 // Списки моделей
 var (
-	ModelsGeneral = []string{"mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"}
+	ModelsGeneral = []string{"mistral-small-latest", "mistral-medium-latest", "mistral-large-latest"}
 	ModelsCode    = []string{"devstral-2512", "codestral-latest", "labs-devstral-small-2512"}
-	ModelsVision  = []string{"mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"}
+	ModelsVision  = []string{"mistral-small-latest", "mistral-medium-latest", "mistral-large-latest"}
 	ModelAudio    = "voxtral-mini-latest"
 	ModelOCR      = "mistral-ocr-latest"
 )

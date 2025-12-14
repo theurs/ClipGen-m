@@ -1,0 +1,1 @@
+go build -o clipgen-m.exe -ldflags "-H=windowsgui" main.go
