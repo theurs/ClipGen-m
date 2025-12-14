@@ -679,7 +679,7 @@ func loadOrCreateConfig() error {
   # --- ИЗОБРАЖЕНИЯ (конкретная задача с ИИ) ---
   - name: "OCR / Текст с картинки (F9)"
     hotkey: "Ctrl+F9"
-    prompt: "Извлеки весь текст с изображения. Верни только текст."
+    prompt: "Извлеки весь текст с изображения. Верни только текст. То есть выполни работу OCR."
     input_type: "image"
     output_mode: "notepad"
 
