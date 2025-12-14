@@ -437,12 +437,25 @@ func processFiles(files []string, action Action) (string, error) {
 // ==========================================================
 
 // Проверяет, является ли строка путем к существующему изображению
+// isImageFile проверяет расширение и существование файла
 func isImageFile(path string) bool {
-	// Очищаем от кавычек, если они есть (часто бывают при копировании пути)
+	// Очищаем путь от кавычек
 	path = strings.Trim(strings.TrimSpace(path), "\"")
 
+	// Сначала проверяем длину и запрещенные символы, чтобы не мучить диск
+	// В Windows пути редко длиннее 260 символов, а текст может быть огромным
+	if len(path) > 260 || strings.ContainsAny(path, "<>\"|?*") {
+		return false
+	}
+
 	info, err := os.Stat(path)
-	if os.IsNotExist(err) || info.IsDir() {
+	// ИСПРАВЛЕНИЕ: Если есть ЛЮБАЯ ошибка (не найден, кривое имя, нет прав),
+	// считаем, что это не файл.
+	if err != nil {
+		return false
+	}
+
+	if info.IsDir() {
 		return false
 	}
 
