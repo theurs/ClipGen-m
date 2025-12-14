@@ -29,15 +29,8 @@ import (
 )
 
 // ==========================================================
-// CONSTANTS & GLOBALS
+// GLOBALS & WINAPI
 // ==========================================================
-
-// СИСТЕМНЫЙ ПРОМПТ
-const SystemPromptText = `You are a helpful assistant.
-IMPORTANT OUTPUT RULES:
-1. Output ONLY PLAIN TEXT. Do NOT use Markdown formatting (no **bold**, no headers, no code blocks).
-2. If the result involves a table, use TABS as separators between columns so it can be pasted directly into Excel.
-3. Do not add introductory or concluding chatter, just the result.`
 
 var (
 	user32                     = syscall.NewLazyDLL("user32.dll")
@@ -71,9 +64,14 @@ type BITMAPFILEHEADER struct {
 // ==========================================================
 // CONFIG STRUCTURES
 // ==========================================================
+
 type Config struct {
-	Actions []Action `yaml:"actions"`
+	EditorPath   string   `yaml:"editor_path"`   // Путь к редактору (Notepad, MarkText и т.д.)
+	LLMPath      string   `yaml:"llm_path"`      // Путь к исполняемому файлу LLM (mistral.exe и т.д.)
+	SystemPrompt string   `yaml:"system_prompt"` // Базовая инструкция для LLM
+	Actions      []Action `yaml:"actions"`
 }
+
 type Action struct {
 	Name        string `yaml:"name"`
 	Hotkey      string `yaml:"hotkey"`
@@ -94,6 +92,7 @@ var (
 // ==========================================================
 // MAIN & LIFECYCLE
 // ==========================================================
+
 func main() {
 	setupLogging()
 	defer logFile.Close()
@@ -125,6 +124,7 @@ func onExit() {
 // ==========================================================
 // LOGGING
 // ==========================================================
+
 func setupLogging() {
 	configDir, _ := os.UserConfigDir()
 	appDir := filepath.Join(configDir, "clipgen-m")
@@ -133,6 +133,7 @@ func setupLogging() {
 	var err error
 	logFile, err = os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
+		// Fallback если не удалось создать в папке пользователя
 		logFile, _ = os.OpenFile("clipgen.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	}
 	mw := io.MultiWriter(os.Stdout, logFile)
@@ -142,13 +143,20 @@ func setupLogging() {
 func openLogFile() {
 	configDir, _ := os.UserConfigDir()
 	logPath := filepath.Join(configDir, "clipgen-m", "clipgen.log")
-	cmd := exec.Command("notepad.exe", logPath)
-	cmd.Start()
+
+	// Используем редактор из конфига
+	cmd := exec.Command(config.EditorPath, logPath)
+	if err := cmd.Start(); err != nil {
+		log.Printf("Ошибка открытия лога через %s: %v", config.EditorPath, err)
+		// Fallback на обычный блокнот, если кастомный путь кривой
+		exec.Command("notepad.exe", logPath).Start()
+	}
 }
 
 // ==========================================================
 // ACTION HANDLER
 // ==========================================================
+
 func handleAction(action Action) {
 	log.Printf("Запуск действия: %s [%s]", action.Name, action.InputType)
 
@@ -175,7 +183,6 @@ func handleAction(action Action) {
 	}
 
 	if err != nil {
-		// Ошибка тоже теперь выводится красиво через диалог, если zenity доступен
 		zenity.Error(fmt.Sprintf("Ошибка выполнения:\n%v", err),
 			zenity.Title("ClipGen Error"),
 			zenity.Icon(zenity.ErrorIcon))
@@ -190,11 +197,12 @@ func handleAction(action Action) {
 
 	log.Println("Успех. Вывод результата.")
 	switch action.OutputMode {
-	case "notepad":
-		if err := showInNotepad(resultText); err != nil {
-			log.Printf("Ошибка открытия блокнота: %v", err)
+	case "notepad", "editor": // Поддерживаем оба названия для удобства
+		if err := showInEditor(resultText); err != nil {
+			log.Printf("Ошибка открытия редактора: %v", err)
 		}
 	default:
+		// Режим replace / copy
 		clipboard.Write(clipboard.FmtText, []byte(resultText))
 		time.Sleep(100 * time.Millisecond)
 		paste()
@@ -265,6 +273,8 @@ func handleLayoutSwitchAction() (string, error) {
 
 func handleAutoAction(action Action) (string, error) {
 	log.Println("Режим 'auto': определяем тип данных в буфере...")
+
+	// 1. Пробуем найти саму картинку (байты)
 	imageBytes := clipboard.Read(clipboard.FmtImage)
 	if len(imageBytes) == 0 {
 		var apiErr error
@@ -276,14 +286,29 @@ func handleAutoAction(action Action) (string, error) {
 	if len(imageBytes) > 0 {
 		return processImage(imageBytes, action)
 	}
+
+	// 2. Пробуем найти список файлов (CF_HDROP)
 	files, _ := getClipboardFiles()
 	if len(files) > 0 {
 		return processFiles(files, action)
 	}
+
+	// 3. Пробуем получить текст
 	clipboardText, err := copySelection()
 	if err == nil && len(clipboardText) > 0 {
+		// --- НОВАЯ ЛОГИКА ---
+		// Проверяем, не является ли скопированный текст путем к файлу картинки
+		cleanedPath := strings.Trim(strings.TrimSpace(clipboardText), "\"")
+		if isImageFile(cleanedPath) {
+			log.Printf("В буфере найден путь к картинке: %s", cleanedPath)
+			// Передаем как список из одного файла в обработчик файлов
+			return processFiles([]string{cleanedPath}, action)
+		}
+		// --------------------
+
 		return processText(clipboardText, action)
 	}
+
 	return "", fmt.Errorf("буфер пуст или формат не поддерживается")
 }
 
@@ -297,13 +322,37 @@ func handleTextAction(action Action) (string, error) {
 
 func handleImageAction(action Action) (string, error) {
 	imageBytes := clipboard.Read(clipboard.FmtImage)
+
+	// Попытка через WinAPI
 	if len(imageBytes) == 0 {
 		var err error
 		imageBytes, err = getClipboardImageViaAPI()
 		if err != nil {
-			return "", fmt.Errorf("буфер не содержит изображения: %v", err)
+			log.Printf("WinAPI image read failed: %v", err)
 		}
 	}
+
+	// --- НОВАЯ ЛОГИКА ---
+	// Если байтов нет, проверяем, может в буфере путь к файлу (текст)
+	if len(imageBytes) == 0 {
+		text, err := copySelection()
+		if err == nil {
+			cleanedPath := strings.Trim(strings.TrimSpace(text), "\"")
+			if isImageFile(cleanedPath) {
+				log.Printf("Загружаем изображение по пути из буфера: %s", cleanedPath)
+				fileBytes, err := os.ReadFile(cleanedPath)
+				if err == nil {
+					imageBytes = fileBytes
+				}
+			}
+		}
+	}
+	// --------------------
+
+	if len(imageBytes) == 0 {
+		return "", fmt.Errorf("буфер не содержит изображения или пути к нему")
+	}
+
 	return processImage(imageBytes, action)
 }
 
@@ -325,7 +374,7 @@ func processText(text string, action Action) (string, error) {
 	if pErr != nil {
 		return "", nil
 	}
-	return runMistral(finalPrompt, nil, action.MistralArgs)
+	return runLLM(finalPrompt, nil, action.MistralArgs)
 }
 
 func processImage(imageBytes []byte, action Action) (string, error) {
@@ -342,7 +391,7 @@ func processImage(imageBytes []byte, action Action) (string, error) {
 	if pErr != nil {
 		return "", nil
 	}
-	return runMistral(finalPrompt, []string{tempFile}, action.MistralArgs)
+	return runLLM(finalPrompt, []string{tempFile}, action.MistralArgs)
 }
 
 func processFiles(files []string, action Action) (string, error) {
@@ -362,7 +411,7 @@ func processFiles(files []string, action Action) (string, error) {
 		log.Printf("Транскрипция аудио (%d)...", len(audioFiles))
 		for _, audioPath := range audioFiles {
 			prompt := "Transcribe this audio file to text verbatim. Output ONLY the text."
-			transText, err := runMistral(prompt, []string{audioPath}, "")
+			transText, err := runLLM(prompt, []string{audioPath}, "")
 			if err != nil {
 				transText = fmt.Sprintf("[Ошибка аудио %s]", filepath.Base(audioPath))
 			} else if strings.TrimSpace(transText) == "" {
@@ -380,40 +429,47 @@ func processFiles(files []string, action Action) (string, error) {
 	if err != nil {
 		return "", nil
 	}
-	return runMistral(finalPrompt, finalFileList, action.MistralArgs)
+	return runLLM(finalPrompt, finalFileList, action.MistralArgs)
 }
 
 // ==========================================================
 // HELPERS
 // ==========================================================
 
+// Проверяет, является ли строка путем к существующему изображению
+func isImageFile(path string) bool {
+	// Очищаем от кавычек, если они есть (часто бывают при копировании пути)
+	path = strings.Trim(strings.TrimSpace(path), "\"")
+
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) || info.IsDir() {
+		return false
+	}
+
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".png", ".jpg", ".jpeg", ".bmp", ".webp":
+		return true
+	}
+	return false
+}
+
 func preparePrompt(promptTmpl string, actionName string) (string, error) {
 	if strings.Contains(promptTmpl, "{{ask_user}}") {
 		defaultInput := inputHistory[actionName]
 		windowTitle := fmt.Sprintf("ClipGen: %s", actionName)
 
-		// --- ХАК ДЛЯ ВЫВОДА ОКНА НА ПЕРЕДНИЙ ПЛАН ---
 		go func() {
-			// Даем окну время на отрисовку (100-200мс обычно достаточно)
 			time.Sleep(200 * time.Millisecond)
-
-			// Преобразуем строку заголовка для Windows API
 			titlePtr, _ := syscall.UTF16PtrFromString(windowTitle)
-
-			// Ищем окно по заголовку (класс окна = 0/nil)
 			hwnd, _, _ := findWindow.Call(0, uintptr(unsafe.Pointer(titlePtr)))
-
 			if hwnd != 0 {
-				// Если нашли - тащим наверх
 				setForegroundWindow.Call(hwnd)
-			} else {
-				log.Println("Не удалось найти окно для фокусировки (возможно, открылось слишком медленно)")
 			}
 		}()
-		// ---------------------------------------------
 
 		userInput, err := zenity.Entry("Что нужно сделать с этими данными?",
-			zenity.Title(windowTitle), // Важно: заголовок должен совпадать с тем, что мы ищем выше
+			zenity.Title(windowTitle),
 			zenity.EntryText(defaultInput))
 
 		if err != nil {
@@ -430,13 +486,13 @@ func preparePrompt(promptTmpl string, actionName string) (string, error) {
 	return promptTmpl, nil
 }
 
-// showInputBox - БОЛЬШЕ НЕ НУЖЕН, заменен на zenity.Entry внутри preparePrompt.
-// Но если где-то остался вызов, можно удалить. В коде выше он удален.
-
-func runMistral(prompt string, filePaths []string, args string) (string, error) {
+func runLLM(prompt string, filePaths []string, args string) (string, error) {
 	var argList []string
 
-	argList = append(argList, "-s", SystemPromptText)
+	// Используем системный промпт из конфига
+	if config.SystemPrompt != "" {
+		argList = append(argList, "-s", config.SystemPrompt)
+	}
 
 	if args != "" {
 		argList = append(argList, strings.Fields(args)...)
@@ -446,9 +502,10 @@ func runMistral(prompt string, filePaths []string, args string) (string, error) 
 		argList = append(argList, "-f", f)
 	}
 
-	log.Printf("Mistral CMD: mistral.exe %v", argList)
+	// Используем путь к утилите из конфига
+	log.Printf("LLM CMD: %s %v", config.LLMPath, argList)
 
-	cmd := exec.Command("mistral.exe", argList...)
+	cmd := exec.Command(config.LLMPath, argList...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	cmd.Stdin = strings.NewReader(prompt)
 	var out, stderr bytes.Buffer
@@ -457,10 +514,10 @@ func runMistral(prompt string, filePaths []string, args string) (string, error) 
 	start := time.Now()
 
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("mistral error: %v | stderr: %s", err, stderr.String())
+		return "", fmt.Errorf("LLM error: %v | stderr: %s", err, stderr.String())
 	}
 
-	log.Printf("Mistral выполнено за %v. Размер ответа: %d", time.Since(start), out.Len())
+	log.Printf("LLM выполнено за %v. Размер ответа: %d", time.Since(start), out.Len())
 	return strings.TrimSpace(out.String()), nil
 }
 
@@ -557,12 +614,15 @@ func paste() {
 	kb.Launching()
 }
 
-func showInNotepad(content string) error {
+func showInEditor(content string) error {
 	tempFile, err := saveTextToTemp(content)
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command("notepad.exe", tempFile)
+
+	// Используем настроенный редактор
+	log.Printf("Открываем редактор: %s %s", config.EditorPath, tempFile)
+	cmd := exec.Command(config.EditorPath, tempFile)
 	return cmd.Start()
 }
 
@@ -580,6 +640,7 @@ func saveTextToTemp(content string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// BOM для Windows приложений (Блокнота), но нормальные редакторы типа MarkText его игнорируют или едят нормально
 	tempFile.Write([]byte{0xEF, 0xBB, 0xBF})
 	tempFile.WriteString(content)
 	tempFile.Close()
@@ -589,6 +650,7 @@ func saveTextToTemp(content string) (string, error) {
 // ==========================================================
 // TRAY & CONFIG
 // ==========================================================
+
 func setupTray() {
 	systray.SetIcon(iconNormal)
 	systray.SetTitle("ClipGen-m")
@@ -641,7 +703,25 @@ func loadOrCreateConfig() error {
 		log.Println("Конфиг не найден, создание нового...")
 		os.MkdirAll(filepath.Dir(path), 0755)
 
-		defaultConfig := `actions:
+		defaultConfig := `
+# --- СИСТЕМНЫЕ НАСТРОЙКИ ---
+
+# Программа для открытия результатов (Блокнот, MarkText, VS Code)
+# Если используешь MarkText, укажи полный путь, например: "C:\\Program Files\\MarkText\\MarkText.exe"
+editor_path: "notepad.exe"
+
+# Утилита для запуска нейросети (mistral.exe, llama3.exe и т.д.)
+llm_path: "mistral.exe"
+
+# Базовая инструкция для нейросети
+# Если используешь MarkText, разреши Markdown. Если Блокнот - запрети.
+system_prompt: |
+  You work in a Windows utility called ClipGen-m that helps make requests to LLMs through the clipboard.
+  Use plaintext, markdown is not supported by target application.
+  Use tabs for separating columns in tables, this is necessary to be able to insert text into Excel.
+  Do not add introductory fillers.
+
+actions:
   # --- ЛОКАЛЬНЫЕ ДЕЙСТВИЯ (без ИИ) ---
   - name: "Сменить раскладку (Punto)"
     hotkey: "Pause"
@@ -658,17 +738,23 @@ func loadOrCreateConfig() error {
     input_type: "text"
     output_mode: "replace"
 
-  - name: "Перевести (F3)"
+  - name: "Перевести и показать (F3)"
     hotkey: "Ctrl+F3"
     prompt: "Переведи на русский (если уже рус - на англ). Верни только перевод.\n{{.clipboard}}"
+    input_type: "auto"
+    output_mode: "editor"
+
+  - name: "Перевести и заменить (F4)"
+    hotkey: "Ctrl+F4"
+    prompt: "Переведи на русский (если уже рус - на англ). Верни только перевод.\n{{.clipboard}}"
     input_type: "text"
-    output_mode: "notepad"
+    output_mode: "replace"
 
   - name: "Объяснить (F6)"
     hotkey: "Ctrl+F6"
-    prompt: "Объясни это простыми словами:\n{{.clipboard}}"
-    input_type: "text"
-    output_mode: "notepad"
+    prompt: "Объясни это простыми словами. Используй форматирование.\n{{.clipboard}}"
+    input_type: "auto"
+    output_mode: "editor"
 
   - name: "Выполнить просьбу (F8)"
     hotkey: "Ctrl+F8"
@@ -680,17 +766,17 @@ func loadOrCreateConfig() error {
   - name: "OCR / Текст с картинки (F9)"
     hotkey: "Ctrl+F9"
     prompt: "Извлеки весь текст с изображения. Верни только текст. То есть выполни работу OCR."
-    input_type: "image"
-    output_mode: "notepad"
+    input_type: "auto"
+    output_mode: "editor"
 
   # --- ФАЙЛЫ (конкретная задача с ИИ) ---
   - name: "Сделать саммари из файлов (F10)"
     hotkey: "Ctrl+F10"
     prompt: |
       Ты аналитик. Сделай краткое саммари по всем предоставленным файлам.
-      Структурируй ответ.
+      Структурируй ответ, используй списки.
     input_type: "files"
-    output_mode: "notepad"
+    output_mode: "editor"
 
   # --- УНИВЕРСАЛЬНЫЙ РЕЖИМ (с окном ввода, с ИИ) ---
   - name: "Умный анализ (F12)"
@@ -704,9 +790,9 @@ func loadOrCreateConfig() error {
       ЗАДАЧА ПОЛЬЗОВАТЕЛЯ:
       {{ask_user}}
     input_type: "auto"
-    output_mode: "notepad"`
+    output_mode: "editor"`
 
-		os.WriteFile(path, []byte(defaultConfig), 0644)
+		os.WriteFile(path, []byte(strings.TrimSpace(defaultConfig)), 0644)
 	}
 
 	data, err := os.ReadFile(path)
