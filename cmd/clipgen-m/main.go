@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -59,6 +60,19 @@ type BITMAPFILEHEADER struct {
 	BfReserved1 uint16
 	BfReserved2 uint16
 	BfOffBits   uint32
+}
+
+// НОВАЯ ФУНКЦИЯ: Безопасное открытие буфера с повторными попытками
+// Это решает проблему "Access Denied", если буфер занят другим процессом
+func tryOpenClipboard() (bool, error) {
+	for i := 0; i < 20; i++ { // Пытаемся 20 раз
+		r, _, _ := openClipboard.Call(0)
+		if r != 0 {
+			return true, nil
+		}
+		time.Sleep(10 * time.Millisecond) // Пауза 10мс между попытками
+	}
+	return false, fmt.Errorf("не удалось открыть буфер обмена (занят другим приложением)")
 }
 
 // ==========================================================
@@ -204,7 +218,11 @@ func handleAction(action Action) {
 	default:
 		// Режим replace / copy
 		clipboard.Write(clipboard.FmtText, []byte(resultText))
-		time.Sleep(100 * time.Millisecond)
+
+		// ИЗМЕНЕНИЕ: Добавлена пауза перед вставкой.
+		// Если вставить мгновенно, Windows может не успеть разблокировать буфер после записи.
+		time.Sleep(200 * time.Millisecond)
+
 		paste()
 	}
 }
@@ -215,12 +233,24 @@ func handleAction(action Action) {
 
 var (
 	engToRus = map[rune]rune{
-		'q': 'й', 'w': 'ц', 'e': 'у', 'r': 'к', 't': 'е', 'y': 'н', 'u': 'г', 'i': 'ш', 'o': 'щ', 'p': 'з', '[': 'х', ']': 'ъ',
+		// Основной ряд (нижний регистр)
+		'`': 'ё', 'q': 'й', 'w': 'ц', 'e': 'у', 'r': 'к', 't': 'е', 'y': 'н', 'u': 'г', 'i': 'ш', 'o': 'щ', 'p': 'з', '[': 'х', ']': 'ъ',
 		'a': 'ф', 's': 'ы', 'd': 'в', 'f': 'а', 'g': 'п', 'h': 'р', 'j': 'о', 'k': 'л', 'l': 'д', ';': 'ж', '\'': 'э',
-		'z': 'я', 'x': 'ч', 'c': 'с', 'v': 'м', 'b': 'и', 'n': 'т', 'm': 'ь', ',': 'б', '.': 'ю', '`': 'ё',
-		'Q': 'Й', 'W': 'Ц', 'E': 'У', 'R': 'К', 'T': 'Е', 'Y': 'Н', 'U': 'Г', 'I': 'Ш', 'O': 'Щ', 'P': 'З', '{': 'Х', '}': 'Ъ',
+		'z': 'я', 'x': 'ч', 'c': 'с', 'v': 'м', 'b': 'и', 'n': 'т', 'm': 'ь', ',': 'б', '.': 'ю', '/': '.',
+
+		// Основной ряд (верхний регистр + Shift)
+		'~': 'Ё', 'Q': 'Й', 'W': 'Ц', 'E': 'У', 'R': 'К', 'T': 'Е', 'Y': 'Н', 'U': 'Г', 'I': 'Ш', 'O': 'Щ', 'P': 'З', '{': 'Х', '}': 'Ъ',
 		'A': 'Ф', 'S': 'Ы', 'D': 'В', 'F': 'А', 'G': 'П', 'H': 'Р', 'J': 'О', 'K': 'Л', 'L': 'Д', ':': 'Ж', '"': 'Э',
-		'Z': 'Я', 'X': 'Ч', 'C': 'С', 'V': 'М', 'B': 'И', 'N': 'Т', 'M': 'Ь', '<': 'Б', '>': 'Ю', '~': 'Ё',
+		'Z': 'Я', 'X': 'Ч', 'C': 'С', 'V': 'М', 'B': 'И', 'N': 'Т', 'M': 'Ь', '<': 'Б', '>': 'Ю', '?': ',',
+
+		// Цифровой ряд (Спецсимволы Shift+Цифра)
+		// Важно: 1->1 не пишем, так как они совпадают, но Shift+Цифра отличаются
+		'@': '"', '#': '№', '$': ';', '^': ':', '&': '?', '|': '/',
+
+		// Специфические символы, которые часто забывают
+		// В русской раскладке слэш (/) на месте пайпа (|)
+		// А бэкслеш (\) часто совпадает, но иногда зависит от клавиатуры.
+		// Обычно '\' -> '\', но Shift+'\' ('|') -> '/'.
 	}
 	rusToEng = make(map[rune]rune)
 )
@@ -399,7 +429,7 @@ func processFiles(files []string, action Action) (string, error) {
 	var imageExtensions = map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".bmp": true, ".webp": true}
 	for _, f := range files {
 		ext := strings.ToLower(filepath.Ext(f))
-		if ext == ".mp3" || ext == ".wav" || ext == ".m4a" || ext == ".ogg" {
+		if ext == ".mp3" || ext == ".wav" || ext == ".m4a" || ext == ".ogg" || ext == ".flac" || ext == ".opus" {
 			audioFiles = append(audioFiles, f)
 		} else if imageExtensions[ext] {
 			finalFileList = append(finalFileList, f)
@@ -534,15 +564,22 @@ func runLLM(prompt string, filePaths []string, args string) (string, error) {
 	return strings.TrimSpace(out.String()), nil
 }
 
+// ИЗМЕНЕНИЕ: Функция теперь блокирует поток и использует tryOpenClipboard
 func getClipboardImageViaAPI() ([]byte, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	r, _, _ := isClipboardFormatAvailable.Call(CF_DIB)
 	if r == 0 {
 		return nil, fmt.Errorf("CF_DIB не доступен")
 	}
-	if r, _, _ := openClipboard.Call(0); r == 0 {
-		return nil, fmt.Errorf("OpenClipboard failed")
+
+	// Используем безопасное открытие
+	if success, err := tryOpenClipboard(); !success {
+		return nil, err
 	}
 	defer closeClipboard.Call()
+
 	hMem, _, _ := getClipboardData.Call(CF_DIB)
 	if hMem == 0 {
 		return nil, fmt.Errorf("GetClipboardData failed")
@@ -567,12 +604,17 @@ func getClipboardImageViaAPI() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// ИЗМЕНЕНИЕ: Функция теперь блокирует поток и использует tryOpenClipboard
 func getClipboardFiles() ([]string, error) {
-	r, _, _ := openClipboard.Call(0)
-	if r == 0 {
-		return nil, fmt.Errorf("OpenClipboard failed")
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	// Используем безопасное открытие
+	if success, err := tryOpenClipboard(); !success {
+		return nil, err
 	}
 	defer closeClipboard.Call()
+
 	hDrop, _, _ := getClipboardData.Call(CF_HDROP)
 	if hDrop == 0 {
 		return nil, nil
@@ -594,6 +636,7 @@ func getClipboardFiles() ([]string, error) {
 	return files, nil
 }
 
+// ИЗМЕНЕНИЕ: Добавлены стратегические паузы, чтобы исправить Race Condition
 func copySelection() (string, error) {
 	originalContent := clipboard.Read(clipboard.FmtText)
 	kb, err := keybd_event.NewKeyBonding()
@@ -603,13 +646,19 @@ func copySelection() (string, error) {
 	kb.SetKeys(keybd_event.VK_C)
 	kb.HasCTRL(true)
 	kb.Launching()
+
+	// ВАЖНО: Пауза, чтобы дать системе записать данные в буфер
+	// Без этого вызов clipboard.Read блокирует буфер ДО того, как приложение туда напишет
+	time.Sleep(150 * time.Millisecond)
+
 	startTime := time.Now()
 	for time.Since(startTime) < time.Second*1 {
 		newContent := clipboard.Read(clipboard.FmtText)
 		if len(newContent) > 0 && !bytes.Equal(newContent, originalContent) {
 			return string(newContent), nil
 		}
-		time.Sleep(50 * time.Millisecond)
+		// Увеличили паузу внутри цикла для стабильности
+		time.Sleep(100 * time.Millisecond)
 	}
 	if len(originalContent) > 0 {
 		return string(originalContent), nil
@@ -751,7 +800,13 @@ actions:
     input_type: "text"
     output_mode: "replace"
 
-  - name: "Перевести и показать (F3)"
+  - name: "Выполнить просьбу (F2)"
+    hotkey: "Ctrl+F2"
+    prompt: "Выполни просьбу:\n{{.clipboard}}"
+    input_type: "text"
+    output_mode: "replace"
+
+	- name: "Перевести и показать (F3)"
     hotkey: "Ctrl+F3"
     prompt: "Переведи на русский. Верни только перевод. Не используй маркдаун в ответе, только простой текст.\n{{.clipboard}}"
     input_type: "auto"
@@ -763,28 +818,22 @@ actions:
     input_type: "text"
     output_mode: "replace"
 
-  - name: "Объяснить (F6)"
-    hotkey: "Ctrl+F6"
+  - name: "Объяснить (F5)"
+    hotkey: "Ctrl+F5"
     prompt: "Объясни это простыми словами. Не используй маркдаун в ответе, только простой текст.\n{{.clipboard}}"
     input_type: "auto"
     output_mode: "editor"
 
-  - name: "Выполнить просьбу (F8)"
-    hotkey: "Ctrl+F8"
-    prompt: "Выполни просьбу:\n{{.clipboard}}"
-    input_type: "text"
-    output_mode: "replace"
-
   # --- ИЗОБРАЖЕНИЯ (конкретная задача с ИИ) ---
-  - name: "OCR / Текст с картинки (F9)"
-    hotkey: "Ctrl+F9"
+  - name: "OCR / Текст с картинки (F6)"
+    hotkey: "Ctrl+F6"
     prompt: "Извлеки весь текст с изображения. Верни только текст. То есть выполни работу OCR. Не используй маркдаун в ответе, только простой текст."
     input_type: "auto"
     output_mode: "editor"
 
   # --- ФАЙЛЫ (конкретная задача с ИИ) ---
-  - name: "Сделать саммари из файлов (F10)"
-    hotkey: "Ctrl+F10"
+  - name: "Сделать саммари из файлов (F7)"
+    hotkey: "Ctrl+F7"
     prompt: |
       Сделай краткое саммари по всем предоставленным файлам. Не используй маркдаун в ответе, только простой текст.
       Структурируй ответ, используй списки.
@@ -792,8 +841,8 @@ actions:
     output_mode: "editor"
 
   # --- УНИВЕРСАЛЬНЫЙ РЕЖИМ (с окном ввода, с ИИ) ---
-  - name: "Умный анализ (F12)"
-    hotkey: "Ctrl+F12"
+  - name: "Умный анализ (F8)"
+    hotkey: "Ctrl+F8"
     prompt: |
       Проанализируй данные из буфера обмена. Не используй маркдаун в ответе, только простой текст.
       
