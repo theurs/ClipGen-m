@@ -24,24 +24,34 @@ import (
 const (
 	ConfigDirName  = "clipgen-m"
 	ConfigFileName = "mistral.conf"
-	LogFileName    = "err.log"
+	LogFileName    = "mistral_err.log"
 	MaxLogSize     = 10 * 1024 * 1024 // 10 MB
-	BaseURL        = "https://api.mistral.ai"
+
+	// Значения по умолчанию для генерации нового конфига
+	DefaultBaseURL      = "https://api.mistral.ai"
+	DefaultTemperature  = 0.7
+	DefaultMaxTokens    = 8000
+	DefaultSystemPrompt = "Вы — ИИ-ассистент, интегрированный в инструмент командной строки Windows под названием ClipGen-m. Ваш вывод часто копируется непосредственно в буфер обмена пользователя или вставляется в редакторы кода.\n\nРУКОВОДСТВО:\n1. Будьте лаконичны и прямолинейны.\n2. При генерации кода предоставляйте только блок кода, если не требуется объяснение.\n3. Если ввод — это лог ошибки, кратко объясните причину.\n4. Используйте обычный текст вместо markdown.\n5. Не используйте разговорные фразы типа 'Вот код'."
 )
 
-// Списки моделей
-var (
-	ModelsGeneral = []string{"mistral-small-latest", "mistral-medium-latest", "mistral-large-latest"}
-	ModelsCode    = []string{"devstral-2512", "codestral-latest", "labs-devstral-small-2512"}
-	ModelsVision  = []string{"mistral-small-latest", "mistral-medium-latest", "mistral-large-latest"}
-	ModelAudio    = "voxtral-mini-latest"
-	ModelOCR      = "mistral-ocr-latest"
-)
+// Списки моделей по умолчанию (используются, если в конфиге пусто)
+var DefaultModels = map[string][]string{
+	"general": {"mistral-small-latest", "mistral-medium-latest", "mistral-large-latest"},
+	"vision":  {"mistral-small-latest", "mistral-medium-latest", "mistral-large-latest"},
+	"code":    {"devstral-2512", "codestral-latest", "labs-devstral-small-2512"},
+	"audio":   {"voxtral-mini-latest", "voxtral-small-latest"},
+	"ocr":     {"mistral-ocr-latest"},
+}
 
 // --- Структуры данных API ---
 
 type Config struct {
-	ApiKeys []string `json:"api_keys"`
+	ApiKeys      []string            `json:"api_keys"`
+	BaseURL      string              `json:"base_url"`
+	SystemPrompt string              `json:"system_prompt"`
+	Temperature  float64             `json:"temperature"`
+	MaxTokens    int                 `json:"max_tokens"`
+	Models       map[string][]string `json:"models"`
 }
 
 type ChatMessage struct {
@@ -65,6 +75,7 @@ type ChatRequest struct {
 	Model          string        `json:"model"`
 	Messages       []ChatMessage `json:"messages"`
 	Temperature    float64       `json:"temperature"`
+	MaxTokens      int           `json:"max_tokens,omitempty"`
 	ResponseFormat *struct {
 		Type string `json:"type"`
 	} `json:"response_format,omitempty"`
@@ -121,10 +132,12 @@ var (
 
 func init() {
 	flag.Var(&flagFiles, "f", "Путь к файлу (можно несколько)")
-	flag.StringVar(&flagSystem, "s", "You are a helpful assistant.", "Системный промпт")
+	// Дефолт ставим пустым, чтобы понять, задал ли пользователь флаг вручную
+	flag.StringVar(&flagSystem, "s", "", "Системный промпт (переопределяет конфиг)")
 	flag.BoolVar(&flagJson, "j", false, "Принудительный JSON ответ")
-	flag.StringVar(&flagMode, "m", "auto", "Режим: auto, code, ocr, audio")
-	flag.Float64Var(&flagTemp, "t", 0.7, "Температура генерации")
+	flag.StringVar(&flagMode, "m", "auto", "Режим: auto, general, code, ocr, audio, vision")
+	// Дефолт -1.0, чтобы отличить от 0.0 (валидной температуры)
+	flag.Float64Var(&flagTemp, "t", -1.0, "Температура генерации (переопределяет конфиг)")
 	flag.BoolVar(&flagVerbose, "v", false, "Вывод логов в stderr")
 	flag.StringVar(&flagSaveKey, "save-key", "", "Сохранить ключ и выйти")
 }
@@ -133,7 +146,6 @@ func init() {
 
 func main() {
 	flag.Parse()
-	rand.Seed(time.Now().UnixNano())
 
 	// 1. Работа с конфигом
 	configPath, err := getConfigPath()
@@ -158,7 +170,27 @@ func main() {
 		fatal("Нет API ключей. Запустите: mistral.exe -save-key ВАШ_КЛЮЧ")
 	}
 
-	// 2. Чтение входных данных
+	// 2. Определение параметров запроса (Конфиг vs Флаги)
+
+	// Температура: Флаг > Конфиг > Дефолт
+	finalTemp := config.Temperature
+	if flagTemp != -1.0 {
+		finalTemp = flagTemp
+	}
+
+	// Системный промпт: Флаг > Конфиг > Дефолт
+	finalSystem := config.SystemPrompt
+	if flagSystem != "" {
+		finalSystem = flagSystem
+	}
+
+	// URL API
+	baseURL := config.BaseURL
+	if baseURL == "" {
+		baseURL = DefaultBaseURL
+	}
+
+	// 3. Чтение входных данных
 	userPrompt := readStdin()
 	filesData, hasImages, hasAudio, hasPdf := processFiles(flagFiles)
 
@@ -166,21 +198,39 @@ func main() {
 		fatal("Нет входных данных")
 	}
 
-	// 3. Определение режима
+	// 4. Определение режима
 	mode := determineMode(flagMode, userPrompt, hasImages, hasAudio, hasPdf)
+
+	if userPrompt == "" {
+		switch mode {
+		case "audio":
+			// Для аудио самое логичное действие по умолчанию — транскрипция
+			userPrompt = "Запишите этот аудиофайл дословно. Выведите только текст."
+		case "vision":
+			// Для картинок — описание
+			userPrompt = "Опиши это изображение подробно."
+		case "code":
+			// Для файлов кода — объяснение
+			userPrompt = "Объясни логику и назначение этого кода."
+		case "general":
+			// Если просто текстовый файл
+			userPrompt = "Сократи этот текст."
+		}
+	}
 
 	// Предупреждение о смешивании форматов
 	if hasImages && hasAudio {
 		logVerbose("ВНИМАНИЕ: Вы отправляете и изображения, и аудио. Текущие модели Mistral могут не поддерживать оба формата одновременно.")
 	}
 
-	modelsList := selectModelList(mode)
+	// Выбор списка моделей из конфига
+	modelsList := selectModelList(mode, config)
 
 	if flagJson {
 		userPrompt += "\nIMPORTANT: Output strictly in JSON format."
 	}
 
-	// 4. Цикл запросов
+	// 5. Цикл запросов
 	var lastErr error
 	usedKeys := make(map[string]bool)
 
@@ -194,7 +244,7 @@ func main() {
 				break
 			}
 
-			logVerbose("Попытка: Модель [%s], Режим [%s]", modelName, mode)
+			logVerbose("Попытка: Модель [%s], Режим [%s], Temp [%.2f]", modelName, mode, finalTemp)
 
 			var result string
 			var errReq error
@@ -202,12 +252,12 @@ func main() {
 			switch mode {
 			case "ocr":
 				if len(filesData) > 0 {
-					result, errReq = requestOCR(apiKey, modelName, filesData[0])
+					result, errReq = requestOCR(apiKey, baseURL, modelName, filesData[0])
 				} else {
 					errReq = fmt.Errorf("ocr mode requires a file")
 				}
 			default:
-				result, errReq = requestChat(apiKey, modelName, flagSystem, userPrompt, filesData, flagTemp, flagJson)
+				result, errReq = requestChat(apiKey, baseURL, modelName, finalSystem, userPrompt, filesData, finalTemp, config.MaxTokens, flagJson)
 			}
 
 			if errReq == nil {
@@ -223,14 +273,14 @@ func main() {
 			errMsg := errReq.Error()
 
 			if strings.Contains(errMsg, "401") {
-				// Ошибка авторизации: меняем ключ сразу, без паузы
+				// Ошибка авторизации: меняем ключ сразу
 				usedKeys[apiKey] = true
 				logVerbose("Ключ невалиден, пробуем другой...")
 				keyAttempts++
 				continue
 
 			} else if strings.Contains(errMsg, "429") || strings.Contains(errMsg, "500") || strings.Contains(errMsg, "503") {
-				// Ошибка лимитов или сервера: ДЕЛАЕМ ПАУЗУ
+				// Ошибка лимитов или сервера
 				logVerbose("Сервер перегружен или лимит. Ждем 2 сек перед повтором...")
 				time.Sleep(2 * time.Second)
 
@@ -243,7 +293,12 @@ func main() {
 					break
 				}
 			} else {
-				// Критическая ошибка (например 400 Bad Request) - нет смысла повторять
+				// Критическая ошибка (например 400 Bad Request)
+				// Если ошибка 400 и связана с моделью (invalid model), имеет смысл попробовать следующую модель
+				if strings.Contains(errMsg, "model") || strings.Contains(errMsg, "found") {
+					logVerbose("Модель %s недоступна или не существует, переходим к следующей...", modelName)
+					break
+				}
 				fatal("Критическая ошибка API: %v", errReq)
 			}
 		}
@@ -254,8 +309,8 @@ func main() {
 
 // --- Логика запросов ---
 
-func requestChat(apiKey, model, systemPrompt, userText string, files []FileData, temp float64, jsonMode bool) (string, error) {
-	url := BaseURL + "/v1/chat/completions"
+func requestChat(apiKey, baseURL, model, systemPrompt, userText string, files []FileData, temp float64, maxTokens int, jsonMode bool) (string, error) {
+	url := strings.TrimRight(baseURL, "/") + "/v1/chat/completions"
 
 	messages := []ChatMessage{
 		{Role: "system", Content: systemPrompt},
@@ -312,6 +367,7 @@ func requestChat(apiKey, model, systemPrompt, userText string, files []FileData,
 		Model:       model,
 		Messages:    messages,
 		Temperature: temp,
+		MaxTokens:   maxTokens,
 	}
 
 	if jsonMode {
@@ -340,8 +396,8 @@ func requestChat(apiKey, model, systemPrompt, userText string, files []FileData,
 	return resp.Choices[0].Message.Content, nil
 }
 
-func requestOCR(apiKey, model string, file FileData) (string, error) {
-	url := BaseURL + "/v1/ocr"
+func requestOCR(apiKey, baseURL, model string, file FileData) (string, error) {
+	url := strings.TrimRight(baseURL, "/") + "/v1/ocr"
 
 	reqBody := OCRRequest{
 		Model: model,
@@ -444,7 +500,15 @@ func loadConfig(path string) (*Config, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &Config{}, nil
+			// Если файла нет, возвращаем дефолтный конфиг
+			return &Config{
+				ApiKeys:      []string{},
+				BaseURL:      DefaultBaseURL,
+				SystemPrompt: DefaultSystemPrompt,
+				Temperature:  DefaultTemperature,
+				MaxTokens:    DefaultMaxTokens,
+				Models:       DefaultModels,
+			}, nil
 		}
 		return nil, err
 	}
@@ -454,7 +518,56 @@ func loadConfig(path string) (*Config, error) {
 	if err := json.NewDecoder(f).Decode(&cfg); err != nil {
 		return nil, err
 	}
+
+	// Валидация и заполнение отсутствующих полей (миграция старых конфигов)
+	dirty := false
+
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = DefaultBaseURL
+		dirty = true
+	}
+	if cfg.SystemPrompt == "" {
+		cfg.SystemPrompt = DefaultSystemPrompt
+		dirty = true
+	}
+	if cfg.MaxTokens == 0 {
+		cfg.MaxTokens = DefaultMaxTokens
+		dirty = true
+	}
+	// Для float (Temperature) сложно проверить "пустоту" (0.0 может быть валидным),
+	// поэтому оставим как есть, если конфиг уже был. Но если models нет, заполним.
+
+	if cfg.Models == nil {
+		cfg.Models = make(map[string][]string)
+		dirty = true
+	}
+
+	// Проверяем каждую категорию моделей
+	for k, v := range DefaultModels {
+		if list, exists := cfg.Models[k]; !exists || len(list) == 0 {
+			cfg.Models[k] = v
+			dirty = true
+		}
+	}
+
+	// Если мы обновили структуру конфига, сохраним его, чтобы пользователь видел новые поля
+	if dirty && len(cfg.ApiKeys) > 0 {
+		saveConfig(path, &cfg)
+	}
+
 	return &cfg, nil
+}
+
+func saveConfig(path string, cfg *Config) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	encoder := json.NewEncoder(f)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(cfg)
 }
 
 func addKeyToConfig(path, key string) error {
@@ -469,16 +582,7 @@ func addKeyToConfig(path, key string) error {
 	if !exists {
 		cfg.ApiKeys = append(cfg.ApiKeys, key)
 	}
-
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	encoder := json.NewEncoder(f)
-	encoder.SetIndent("", "  ")
-	return encoder.Encode(cfg)
+	return saveConfig(path, cfg)
 }
 
 func getRandomKey(keys []string, exclude map[string]bool) string {
@@ -576,19 +680,20 @@ func determineMode(flagMode, prompt string, hasImg, hasAudio, hasPdf bool) strin
 	return "general"
 }
 
-func selectModelList(mode string) []string {
-	switch mode {
-	case "code":
-		return ModelsCode
-	case "audio":
-		return []string{ModelAudio}
-	case "ocr":
-		return []string{ModelOCR}
-	case "vision":
-		return ModelsVision
-	default:
-		return ModelsGeneral
+func selectModelList(mode string, cfg *Config) []string {
+	// Ищем список в конфиге
+	if list, ok := cfg.Models[mode]; ok && len(list) > 0 {
+		return list
 	}
+	// Если нет в конфиге, ищем в дефолтах
+	if list, ok := DefaultModels[mode]; ok {
+		return list
+	}
+	// Фолбэк на general
+	if list, ok := cfg.Models["general"]; ok && len(list) > 0 {
+		return list
+	}
+	return DefaultModels["general"]
 }
 
 // --- Хелперы ввода/вывода и Логирование ---
@@ -632,29 +737,16 @@ func printOutput(text string, jsonMode bool) {
 	fmt.Println(text)
 }
 
-// rotateLog проверяет размер файла и делает ротацию при необходимости
 func rotateLog(logPath string) {
 	fi, err := os.Stat(logPath)
 	if err != nil {
-		// Файла нет или ошибка доступа - ротация не нужна
 		return
 	}
 
 	if fi.Size() > MaxLogSize {
-		// Файл слишком большой.
-		// 1. Удаляем старый бэкап
 		backupPath := logPath + ".old"
 		_ = os.Remove(backupPath)
-
-		// 2. Переименовываем текущий лог в бэкап
-		// В Windows переименование не сработает, если целевой файл существует,
-		// поэтому удаление выше обязательно.
-		err := os.Rename(logPath, backupPath)
-		if err != nil {
-			// Если не вышло (например, файл занят), просто игнорируем,
-			// будем писать дальше в конец большого файла.
-			// Критично не падать здесь.
-		}
+		_ = os.Rename(logPath, backupPath)
 	}
 }
 
@@ -664,7 +756,6 @@ func appendLog(level, format string, v ...interface{}) {
 		return
 	}
 
-	// Проверяем ротацию ПЕРЕД открытием файла
 	rotateLog(logPath)
 
 	msg := fmt.Sprintf(format, v...)

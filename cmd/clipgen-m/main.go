@@ -806,7 +806,7 @@ actions:
     input_type: "text"
     output_mode: "replace"
 
-	- name: "Перевести и показать (F3)"
+  - name: "Перевести и показать (F3)"
     hotkey: "Ctrl+F3"
     prompt: "Переведи на русский. Верни только перевод. Не используй маркдаун в ответе, только простой текст.\n{{.clipboard}}"
     input_type: "auto"
