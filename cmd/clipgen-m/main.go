@@ -793,7 +793,7 @@ system_prompt: |
   Не добавляйте вступительные заполнители.
 
 # Глобальный хоткей для Вкл/Выкл программы
-app_toggle_hotkey: "Ctrl+Pause"
+app_toggle_hotkey: "Ctrl+F12"
 
 actions:
   # --- ЛОКАЛЬНЫЕ ДЕЙСТВИЯ (без ИИ) ---
