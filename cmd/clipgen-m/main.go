@@ -846,8 +846,8 @@ actions:
     input_type: "text"
     output_mode: "replace"
 
-  - name: "Объяснить (F5)"
-    hotkey: "Ctrl+F5"
+  - name: "Объяснить (AltF5)"
+    hotkey: "Alt+F5"
     prompt: "Объясни это простыми словами. Не используй маркдаун в ответе, только простой текст.\n{{.clipboard}}"
     input_type: "auto"
     output_mode: "editor"
