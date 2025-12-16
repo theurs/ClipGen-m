@@ -182,6 +182,19 @@ func openLogFile() {
 	}
 }
 
+func openConfigFile() {
+	configDir, _ := os.UserConfigDir()
+	configPath := filepath.Join(configDir, "clipgen-m", "config.yaml")
+
+	// Используем редактор из конфига
+	cmd := exec.Command(config.EditorPath, configPath)
+	if err := cmd.Start(); err != nil {
+		log.Printf("Ошибка открытия конфига через %s: %v", config.EditorPath, err)
+		// Fallback на обычный блокнот
+		exec.Command("notepad.exe", configPath).Start()
+	}
+}
+
 // ==========================================================
 // ACTION HANDLER
 // ==========================================================
@@ -667,6 +680,7 @@ func setupTray() {
 	systray.SetTitle("ClipGen-m")
 
 	mToggle := systray.AddMenuItemCheckbox("Активен", "Включить/Выключить обработку клавиш", true)
+	mConfig := systray.AddMenuItem("Настройки", "Редактировать конфиг")
 	mLog := systray.AddMenuItem("Открыть лог", "Посмотреть ошибки")
 	mReload := systray.AddMenuItem("Перезагрузка", "Применить конфиг")
 	systray.AddSeparator()
@@ -709,6 +723,8 @@ func setupTray() {
 
 			case <-mLog.ClickedCh:
 				openLogFile()
+			case <-mConfig.ClickedCh:
+				openConfigFile()
 			case <-mReload.ClickedCh:
 				log.Println("Запрос перезагрузки...")
 				restartApp()
