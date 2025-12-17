@@ -71,6 +71,24 @@ func CreateAndRunMainWindow() {
 
 	var cancelGen context.CancelFunc
 
+	// To prevent too frequent saving when window is being moved/resized rapidly
+	var lastSaveTime time.Time
+
+	// Helper function to save config immediately to avoid losing changes if app crashes
+	saveConfigImmediately := func() {
+		// Prevent saving more than once per 100ms to avoid excessive disk writes during window movement
+		now := time.Now()
+		if now.Sub(lastSaveTime) < 100*time.Millisecond {
+			return
+		}
+		lastSaveTime = now
+
+		b := mainWindow.Bounds()
+		cfg.X, cfg.Y, cfg.Width, cfg.Height = b.X, b.Y, b.Width, b.Height
+		cfg.SendCtrlEnter = chkCtrlEnter.Checked()
+		cfg.Save()
+	}
+
 	// --- ЛОГИКА ---
 
 	appendHistory := func(author, text string) {
@@ -272,7 +290,12 @@ func CreateAndRunMainWindow() {
 					PushButton{Text: "Clr", OnClicked: clearHistory, MaxSize: Size{Width: 40}},
 					VSpacer{Size: 10},
 					PushButton{Text: "Файл", OnClicked: selectFiles},
-					CheckBox{AssignTo: &chkCtrlEnter, Text: "Ctrl+Enter", Checked: cfg.SendCtrlEnter},
+					CheckBox{
+						AssignTo: &chkCtrlEnter,
+						Text: "Ctrl+Enter",
+						Checked: cfg.SendCtrlEnter,
+						OnCheckedChanged: saveConfigImmediately,
+					},
 					HSpacer{},
 					PushButton{Text: "Настройки", OnClicked: openSettings},
 				},
@@ -381,6 +404,12 @@ func CreateAndRunMainWindow() {
 		log.Fatalf("Ошибка создания MainWindow: %v", err)
 	}
 
+	// Attach event handler to save window position and size immediately when changed
+	// BoundsChanged fires when either position or size of the window changes
+	mainWindow.BoundsChanged().Attach(func() {
+		saveConfigImmediately()
+	})
+
 	if len(availableChats) > 0 {
 		_ = chatCombo.SetCurrentIndex(0)
 		loadSelectedChat()
@@ -389,10 +418,9 @@ func CreateAndRunMainWindow() {
 	}
 
 	mainWindow.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
-		b := mainWindow.Bounds()
-		cfg.X, cfg.Y, cfg.Width, cfg.Height = b.X, b.Y, b.Width, b.Height
-		cfg.SendCtrlEnter = chkCtrlEnter.Checked()
-		cfg.Save()
+		// Configuration is already saved immediately when changed,
+		// but we save once more on close to ensure everything is up to date
+		saveConfigImmediately()
 	})
 
 	mainWindow.Run()
