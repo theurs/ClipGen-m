@@ -46,12 +46,15 @@ var DefaultModels = map[string][]string{
 // --- Структуры данных API ---
 
 type Config struct {
-	ApiKeys      []string            `json:"api_keys"`
-	BaseURL      string              `json:"base_url"`
-	SystemPrompt string              `json:"system_prompt"`
-	Temperature  float64             `json:"temperature"`
-	MaxTokens    int                 `json:"max_tokens"`
-	Models       map[string][]string `json:"models"`
+	ApiKeys                   []string            `json:"api_keys"`
+	BaseURL                   string              `json:"base_url"`
+	SystemPrompt              string              `json:"system_prompt"`
+	Temperature               float64             `json:"temperature"`
+	MaxTokens                 int                 `json:"max_tokens"`
+	Models                    map[string][]string `json:"models"`
+	ChatHistoryMaxMessages    int                 `json:"chat_history_max_messages"`  // максимальное количество сообщений (по умолчанию 30)
+	ChatHistoryMaxChars       int                 `json:"chat_history_max_chars"`     // максимальное количество символов (по умолчанию 50000)
+	ImageCharCost             int                 `json:"image_char_cost"`           // стоимость изображения в символах (по умолчанию 2000)
 }
 
 type ChatMessage struct {
@@ -69,6 +72,19 @@ type ContentPart struct {
 		Data   string `json:"data"`
 		Format string `json:"format"`
 	} `json:"input_audio,omitempty"`
+}
+
+// --- Структуры данных для истории чата ---
+type ChatMessageHistory struct {
+	Role      string      `json:"role"`
+	Content   interface{} `json:"content"`
+	Size      int         `json:"size"`
+	Timestamp time.Time   `json:"timestamp"`
+}
+
+type ChatHistory struct {
+	ID       string              `json:"id"`
+	Messages []ChatMessageHistory `json:"messages"`
 }
 
 type ChatRequest struct {
@@ -121,13 +137,15 @@ func (i *arrayFlags) Set(value string) error {
 }
 
 var (
-	flagFiles   arrayFlags
-	flagSystem  string
-	flagJson    bool
-	flagMode    string
-	flagTemp    float64
-	flagVerbose bool
-	flagSaveKey string
+	flagFiles     arrayFlags
+	flagSystem    string
+	flagJson      bool
+	flagMode      string
+	flagTemp      float64
+	flagVerbose   bool
+	flagSaveKey   string
+	flagChatID    string
+	flagClearChat string
 )
 
 func init() {
@@ -140,6 +158,8 @@ func init() {
 	flag.Float64Var(&flagTemp, "t", -1.0, "Температура генерации (переопределяет конфиг)")
 	flag.BoolVar(&flagVerbose, "v", false, "Вывод логов в stderr")
 	flag.StringVar(&flagSaveKey, "save-key", "", "Сохранить ключ и выйти")
+	flag.StringVar(&flagChatID, "chat", "", "ID чата для контекста (включает режим чата)")
+	flag.StringVar(&flagClearChat, "clear-chat", "", "Очистить историю указанного чата")
 }
 
 // --- Main ---
@@ -170,6 +190,15 @@ func main() {
 		fatal("Нет API ключей. Запустите: mistral.exe -save-key ВАШ_КЛЮЧ")
 	}
 
+	// Проверяем флаг очистки чата, если задан - очищаем и завершаем работу
+	if flagClearChat != "" {
+		if err := clearChatHistory(flagClearChat); err != nil {
+			fatal("Ошибка очистки истории чата: %v", err)
+		}
+		fmt.Printf("История чата '%s' очищена\n", flagClearChat)
+		return
+	}
+
 	// 2. Определение параметров запроса (Конфиг vs Флаги)
 
 	// Температура: Флаг > Конфиг > Дефолт
@@ -196,6 +225,15 @@ func main() {
 
 	if userPrompt == "" && len(filesData) == 0 {
 		fatal("Нет входных данных")
+	}
+
+	// Проверяем команду /clear в тексте для очистки текущего чата
+	if flagChatID != "" && strings.TrimSpace(userPrompt) == "/clear" {
+		if err := clearChatHistory(flagChatID); err != nil {
+			fatal("Ошибка очистки истории чата: %v", err)
+		}
+		fmt.Printf("История чата '%s' очищена командой /clear\n", flagChatID)
+		return
 	}
 
 	// 4. Определение режима
@@ -257,10 +295,35 @@ func main() {
 					errReq = fmt.Errorf("ocr mode requires a file")
 				}
 			default:
-				result, errReq = requestChat(apiKey, baseURL, modelName, finalSystem, userPrompt, filesData, finalTemp, config.MaxTokens, flagJson)
+				if flagChatID != "" {
+					// Режим чата - загружаем историю
+					chatHistory, err := loadChatHistory(flagChatID)
+					if err != nil {
+						errReq = fmt.Errorf("ошибка загрузки истории чата: %v", err)
+					} else {
+						// Формируем контекст запроса с историей
+						result, errReq = requestChatWithHistory(apiKey, baseURL, modelName, finalSystem, userPrompt, filesData, finalTemp, config.MaxTokens, flagJson, chatHistory)
+					}
+				} else {
+					result, errReq = requestChat(apiKey, baseURL, modelName, finalSystem, userPrompt, filesData, finalTemp, config.MaxTokens, flagJson)
+				}
 			}
 
 			if errReq == nil {
+				// Если используется режим чата, сохраняем обновленную историю
+				if flagChatID != "" {
+					chatHistory, err := loadChatHistory(flagChatID)
+					if err == nil {
+						userMessage := ChatMessage{
+							Role:    "user",
+							Content: formatChatContent(userPrompt, filesData),
+						}
+						updateChatHistory(chatHistory, userMessage, result, config)
+						if saveErr := saveChatHistory(chatHistory); saveErr != nil {
+							logVerbose("Ошибка сохранения истории чата: %v", saveErr)
+						}
+					}
+				}
 				// Успех
 				printOutput(result, flagJson)
 				return
@@ -362,6 +425,106 @@ func requestChat(apiKey, baseURL, model, systemPrompt, userText string, files []
 	}
 
 	messages = append(messages, ChatMessage{Role: "user", Content: content})
+
+	reqBody := ChatRequest{
+		Model:       model,
+		Messages:    messages,
+		Temperature: temp,
+		MaxTokens:   maxTokens,
+	}
+
+	if jsonMode {
+		reqBody.ResponseFormat = &struct {
+			Type string `json:"type"`
+		}{Type: "json_object"}
+	}
+
+	jsonData, _ := json.Marshal(reqBody)
+	respBytes, err := doHttp(apiKey, url, "application/json", jsonData)
+	if err != nil {
+		return "", err
+	}
+
+	var resp ChatResponse
+	if err := json.Unmarshal(respBytes, &resp); err != nil {
+		return "", fmt.Errorf("json parse error: %v | Body: %s", err, string(respBytes))
+	}
+	if resp.Error != nil {
+		return "", fmt.Errorf("api error %s: %s", resp.Error.Code, resp.Error.Message)
+	}
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("empty choices")
+	}
+
+	return resp.Choices[0].Message.Content, nil
+}
+
+func formatChatContent(userText string, files []FileData) interface{} {
+	var content interface{}
+	if len(files) == 0 {
+		content = userText
+	} else {
+		parts := []ContentPart{}
+		if userText != "" {
+			parts = append(parts, ContentPart{Type: "text", Text: userText})
+		}
+
+		for _, f := range files {
+			if strings.HasPrefix(f.MimeType, "image/") {
+				parts = append(parts, ContentPart{
+					Type: "image_url",
+					ImageUrl: &struct {
+						Url string `json:"url"`
+					}{
+						Url: fmt.Sprintf("data:%s;base64,%s", f.MimeType, f.Base64Content),
+					},
+				})
+			} else if strings.HasPrefix(f.MimeType, "audio/") {
+				format := "mp3"
+				if strings.Contains(f.MimeType, "wav") {
+					format = "wav"
+				}
+				parts = append(parts, ContentPart{
+					Type: "input_audio",
+					InputAudio: &struct {
+						Data   string `json:"data"`
+						Format string `json:"format"`
+					}{
+						Data:   f.Base64Content,
+						Format: format,
+					},
+				})
+			} else if strings.HasPrefix(f.MimeType, "text/") || f.MimeType == "application/json" {
+				textBytes, _ := base64.StdEncoding.DecodeString(f.Base64Content)
+				parts = append(parts, ContentPart{
+					Type: "text",
+					Text: fmt.Sprintf("\n--- File: %s ---\n%s\n", f.Name, string(textBytes)),
+				})
+			}
+		}
+		content = parts
+	}
+	return content
+}
+
+func requestChatWithHistory(apiKey, baseURL, model, systemPrompt, userText string, files []FileData, temp float64, maxTokens int, jsonMode bool, chatHistory *ChatHistory) (string, error) {
+	url := strings.TrimRight(baseURL, "/") + "/v1/chat/completions"
+
+	// Создаем начальные сообщения с системным промптом
+	messages := []ChatMessage{
+		{Role: "system", Content: systemPrompt},
+	}
+
+	// Добавляем сообщения из истории чата
+	for _, msg := range chatHistory.Messages {
+		if msg.Role == "user" || msg.Role == "assistant" {
+			messages = append(messages, ChatMessage{Role: msg.Role, Content: msg.Content})
+		}
+	}
+
+	// Добавляем текущий запрос
+	currentContent := formatChatContent(userText, files)
+	messages = append(messages, ChatMessage{Role: "user", Content: currentContent})
 
 	reqBody := ChatRequest{
 		Model:       model,
@@ -548,6 +711,20 @@ func loadConfig(path string) (*Config, error) {
 			cfg.Models[k] = v
 			dirty = true
 		}
+	}
+
+	// Устанавливаем параметры истории чата, если не заданы
+	if cfg.ChatHistoryMaxMessages == 0 {
+		cfg.ChatHistoryMaxMessages = 30 // значение по умолчанию
+		dirty = true
+	}
+	if cfg.ChatHistoryMaxChars == 0 {
+		cfg.ChatHistoryMaxChars = 50000 // значение по умолчанию
+		dirty = true
+	}
+	if cfg.ImageCharCost == 0 {
+		cfg.ImageCharCost = 2000 // значение по умолчанию
+		dirty = true
 	}
 
 	// Если мы обновили структуру конфига, сохраним его, чтобы пользователь видел новые поля
@@ -780,4 +957,164 @@ func fatal(format string, v ...interface{}) {
 	appendLog("FATAL", format, v...)
 	fmt.Fprintf(os.Stderr, "ERROR: "+format+"\n", v...)
 	os.Exit(1)
+}
+
+// --- Функции для работы с историей чата ---
+
+func getChatDir() (string, error) {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	chatDir := filepath.Join(configDir, ConfigDirName, "mistral_chats")
+	if _, err := os.Stat(chatDir); os.IsNotExist(err) {
+		_ = os.MkdirAll(chatDir, 0755)
+	}
+	return chatDir, nil
+}
+
+func getChatFilePath(chatID string) (string, error) {
+	chatDir, err := getChatDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(chatDir, chatID+".json"), nil
+}
+
+func loadChatHistory(chatID string) (*ChatHistory, error) {
+	chatFilePath, err := getChatFilePath(chatID)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := os.Stat(chatFilePath); os.IsNotExist(err) {
+		// Если файла нет, создаем новую историю
+		return &ChatHistory{
+			ID:       chatID,
+			Messages: []ChatMessageHistory{},
+		}, nil
+	}
+
+	data, err := os.ReadFile(chatFilePath)
+	if err != nil {
+		return nil, err
+	}
+
+	var history ChatHistory
+	if err := json.Unmarshal(data, &history); err != nil {
+		return nil, err
+	}
+
+	return &history, nil
+}
+
+func saveChatHistory(history *ChatHistory) error {
+	chatFilePath, err := getChatFilePath(history.ID)
+	if err != nil {
+		return err
+	}
+
+	file, err := os.Create(chatFilePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(history)
+}
+
+func clearChatHistory(chatID string) error {
+	chatFilePath, err := getChatFilePath(chatID)
+	if err != nil {
+		return err
+	}
+
+	// Удаляем файл истории чата
+	return os.Remove(chatFilePath)
+}
+
+func calculateMessageSize(content interface{}, imageCharCost int) int {
+	size := 0
+	switch v := content.(type) {
+	case string:
+		size = len(v)
+	case []ContentPart:
+		for _, part := range v {
+			switch part.Type {
+			case "text":
+				size += len(part.Text)
+			case "image_url":
+				// Изображения считаются за фиксированное количество символов (по умолчанию 2000)
+				size += imageCharCost
+			case "input_audio":
+				// Аудио тоже может занимать место, можно установить свою стоимость при необходимости
+				// Пока просто добавим длину текста и base64 данных
+				size += len(part.Text)
+				if part.InputAudio != nil && part.InputAudio.Data != "" {
+					size += len(part.InputAudio.Data) // Длина base64 данных
+				}
+			}
+		}
+	}
+	return size
+}
+
+func updateChatHistory(history *ChatHistory, userMessage ChatMessage, assistantResponse string, config *Config) {
+	// Устанавливаем значения по умолчанию, если они не заданы
+	maxMessages := config.ChatHistoryMaxMessages
+	if maxMessages == 0 {
+		maxMessages = 30 // значение по умолчанию
+	}
+	maxChars := config.ChatHistoryMaxChars
+	if maxChars == 0 {
+		maxChars = 50000 // значение по умолчанию
+	}
+	imageCharCost := config.ImageCharCost
+	if imageCharCost == 0 {
+		imageCharCost = 2000 // значение по умолчанию
+	}
+
+	// Добавляем сообщение пользователя
+	userSize := calculateMessageSize(userMessage.Content, imageCharCost)
+	history.Messages = append(history.Messages, ChatMessageHistory{
+		Role:      userMessage.Role,
+		Content:   userMessage.Content,
+		Size:      userSize,
+		Timestamp: time.Now(),
+	})
+
+	// Добавляем ответ ассистента
+	assistantSize := len(assistantResponse)
+	history.Messages = append(history.Messages, ChatMessageHistory{
+		Role:      "assistant",
+		Content:   assistantResponse,
+		Size:      assistantSize,
+		Timestamp: time.Now(),
+	})
+
+	// Применяем ограничения
+	applyHistoryLimits(history, maxMessages, maxChars)
+}
+
+func applyHistoryLimits(history *ChatHistory, maxMessages, maxChars int) {
+	// Ограничиваем количество сообщений
+	if len(history.Messages) > maxMessages {
+		// Удаляем самые старые сообщения
+		history.Messages = history.Messages[len(history.Messages)-maxMessages:]
+	}
+
+	// Ограничиваем размер контекста
+	totalSize := 0
+	for _, msg := range history.Messages {
+		totalSize += msg.Size
+	}
+
+	for totalSize > maxChars && len(history.Messages) > 0 {
+		// Удаляем самое старое сообщение
+		removedMsg := history.Messages[0]
+		history.Messages = history.Messages[1:]
+		totalSize -= removedMsg.Size
+	}
 }

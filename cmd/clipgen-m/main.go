@@ -566,7 +566,14 @@ func getClipboardImageViaAPI() ([]byte, error) {
 	defer globalUnlock.Call(hMem)
 	memSize, _, _ := globalSize.Call(hMem)
 	dibData := make([]byte, memSize)
-	copy(dibData, (*[1 << 30]byte)(unsafe.Pointer(pData))[:memSize])
+
+	// Копирование данных из памяти Windows с использованием unsafe
+	// Это необходимый подход при работе с WinAPI для доступа к данным буфера обмена
+	if memSize > 0 {
+		// Преобразуем указатель в срез, используя unsafe
+		srcSlice := (*[1 << 30]byte)(unsafe.Pointer(pData))[:memSize:memSize]
+		copy(dibData, srcSlice)
+	}
 	infoHeaderSize := binary.LittleEndian.Uint32(dibData[0:4])
 	header := BITMAPFILEHEADER{
 		BfType:    0x4D42,
