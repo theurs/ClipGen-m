@@ -112,3 +112,22 @@ func formatMessages(messages []Message) string {
 	}
 	return sb.String()
 }
+
+// DeleteChat удаляет файл истории чата
+func DeleteChat(chatID string) error {
+	path := filepath.Join(GetChatsDir(), chatID+".json")
+	return os.Remove(path)
+}
+
+// ClearChat очищает историю.
+// Самый простой способ — отправить специальную команду "/clear" в mistral (если он это поддерживает)
+// ИЛИ просто перезаписать файл пустым JSON.
+// Mistral CLI поддерживает команду очистки флагом -clear-chat, реализуем через него.
+func ClearChatHistoryInMistral(chatID string) error {
+	// Для этого нужно вызвать mistral.exe -clear-chat chatID
+	// Но так как у нас нет прямой зависимости от mistral пакета здесь (чтобы не было цикла импортов),
+	// мы можем просто удалить файл. Mistral создаст новый при следующем запросе.
+
+	// Однако, удаление файла стирает контекст полностью.
+	return DeleteChat(chatID)
+}

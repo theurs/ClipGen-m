@@ -28,6 +28,16 @@ func Terminate() {
 	// walk сам обрабатывает выход
 }
 
+// loadIcon пытается загрузить иконку.
+// В текущей версии мы закомментировали использование, чтобы не было паники.
+func loadIcon(name string) *walk.Icon {
+	icon, err := walk.NewIconFromFile(filepath.Join("assets", name))
+	if err != nil {
+		return nil
+	}
+	return icon
+}
+
 func CreateAndRunMainWindow() {
 	var mainWindow *walk.MainWindow
 	var historyTE, inputTE *walk.TextEdit
@@ -37,21 +47,19 @@ func CreateAndRunMainWindow() {
 
 	var filesLabel *walk.Label
 	var attachBtn *walk.PushButton
+	var settingsBtn *walk.PushButton
+
 	var attachedFiles []string
 
 	cfg := config.Load()
 	availableChats := chat.ListChats()
 
-	// --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+	// --- ЛОГИКА ---
 
 	appendHistory := func(author, text string) {
-		// ИЗМЕНЕНИЕ ЗДЕСЬ: Полная дата и время для текущего сообщения
 		currentTime := time.Now().Format("02.01.2006 15:04")
-
 		msg := fmt.Sprintf("%s [%s]:\r\n%s\r\n\r\n", author, currentTime, text)
 		historyTE.AppendText(msg)
-
-		// Прокрутка вниз
 		historyTE.SendMessage(277, 7, 0)
 	}
 
@@ -78,9 +86,66 @@ func CreateAndRunMainWindow() {
 		}
 		text := chat.LoadHistory(chatID)
 		historyTE.SetText(text)
-
-		// Прокрутка вниз при загрузке
 		historyTE.SendMessage(277, 7, 0)
+	}
+
+	deleteCurrentChat := func() {
+		currentChatID := chatCombo.Text()
+		if currentChatID == "" || currentChatID == "default" {
+			walk.MsgBox(mainWindow, "Ошибка", "Нельзя удалить этот чат.", walk.MsgBoxIconError)
+			return
+		}
+
+		res := walk.MsgBox(mainWindow, "Удаление",
+			fmt.Sprintf("Вы уверены, что хотите удалить чат '%s'?", currentChatID),
+			walk.MsgBoxYesNo|walk.MsgBoxIconWarning)
+
+		if res == walk.DlgCmdYes {
+			if err := chat.DeleteChat(currentChatID); err != nil {
+				walk.MsgBox(mainWindow, "Ошибка", "Не удалось удалить файл: "+err.Error(), walk.MsgBoxIconError)
+				return
+			}
+			cfg.RemoveChatSettings(currentChatID)
+
+			availableChats = chat.ListChats()
+			chatCombo.SetModel(availableChats)
+			chatCombo.SetText("default")
+			loadSelectedChat()
+
+			walk.MsgBox(mainWindow, "Успех", "Чат удален.", walk.MsgBoxIconInformation)
+		}
+	}
+
+	clearHistory := func() {
+		currentChatID := chatCombo.Text()
+		res := walk.MsgBox(mainWindow, "Очистка", "Очистить историю переписки?", walk.MsgBoxYesNo|walk.MsgBoxIconQuestion)
+
+		if res == walk.DlgCmdYes {
+			_ = chat.DeleteChat(currentChatID)
+			historyTE.SetText("")
+			appendHistory("Система", "История очищена.")
+		}
+	}
+
+	openSettings := func() {
+		currentChatID := chatCombo.Text()
+		if currentChatID == "" {
+			return
+		}
+
+		settings := cfg.GetChatSettings(currentChatID)
+
+		ok, err := RunSettingsDialog(mainWindow, &settings)
+		if err != nil {
+			walk.MsgBox(mainWindow, "Ошибка", err.Error(), walk.MsgBoxIconError)
+			return
+		}
+
+		if ok {
+			cfg.SetChatSettings(currentChatID, settings)
+			cfg.Save()
+			walk.MsgBox(mainWindow, "Настройки", "Настройки чата сохранены.", walk.MsgBoxIconInformation)
+		}
 	}
 
 	doSend := func() {
@@ -94,7 +159,6 @@ func CreateAndRunMainWindow() {
 			currentChatID = "default"
 			chatCombo.SetText(currentChatID)
 		}
-
 		if strings.TrimSpace(prompt) == "" {
 			prompt = "[Анализ файлов]"
 		}
@@ -113,12 +177,22 @@ func CreateAndRunMainWindow() {
 
 		filesToSend := make([]string, len(attachedFiles))
 		copy(filesToSend, attachedFiles)
-
 		attachedFiles = []string{}
 		updateFilesLabel()
 
+		chatSettings := cfg.GetChatSettings(currentChatID)
+
 		go func() {
-			answer, err := mistral.Run(prompt, currentChatID, filesToSend)
+			opts := mistral.RunOptions{
+				Prompt:       prompt,
+				ChatID:       currentChatID,
+				Files:        filesToSend,
+				SystemPrompt: chatSettings.SystemPrompt,
+				Temperature:  chatSettings.Temperature,
+				ModelMode:    chatSettings.ModelMode,
+			}
+
+			answer, err := mistral.Run(opts)
 			if err != nil {
 				answer = "Ошибка: " + err.Error()
 			}
@@ -137,7 +211,6 @@ func CreateAndRunMainWindow() {
 		dlg := new(walk.FileDialog)
 		dlg.Title = "Выберите файлы"
 		dlg.Filter = "Все файлы (*.*)|*.*"
-
 		if ok, err := dlg.ShowOpen(mainWindow); err == nil && ok {
 			attachedFiles = append(attachedFiles, dlg.FilePath)
 			updateFilesLabel()
@@ -149,12 +222,10 @@ func CreateAndRunMainWindow() {
 	err := MainWindow{
 		AssignTo: &mainWindow,
 		Title:    "ClipGen-m ChatUI",
-		Bounds: Rectangle{
-			X: cfg.X, Y: cfg.Y, Width: cfg.Width, Height: cfg.Height,
-		},
-		Layout: VBox{},
+		Bounds:   Rectangle{X: cfg.X, Y: cfg.Y, Width: cfg.Width, Height: cfg.Height},
+		Layout:   VBox{},
 		Children: []Widget{
-			// Тулбар
+
 			Composite{
 				Layout: HBox{},
 				Children: []Widget{
@@ -165,12 +236,36 @@ func CreateAndRunMainWindow() {
 						Model:                 availableChats,
 						OnCurrentIndexChanged: func() { loadSelectedChat() },
 						OnEditingFinished:     func() { loadSelectedChat() },
+						MinSize:               Size{Width: 150},
 					},
 
+					// Кнопка удаления
 					PushButton{
-						AssignTo:  &attachBtn,
-						Text:      "📎 Файл",
-						OnClicked: selectFiles,
+						Text: "Del",
+						// Image:     loadIcon("delete.ico"), <--- ЗАКОММЕНТИРОВАНО
+						OnClicked:   deleteCurrentChat,
+						ToolTipText: "Удалить чат навсегда",
+						MaxSize:     Size{Width: 40},
+					},
+
+					// Кнопка очистки
+					PushButton{
+						Text: "Clr",
+						// Image:     loadIcon("clean.ico"), <--- ЗАКОММЕНТИРОВАНО
+						OnClicked:   clearHistory,
+						ToolTipText: "Очистить историю сообщений",
+						MaxSize:     Size{Width: 40},
+					},
+
+					VSpacer{Size: 10},
+
+					// Кнопка файла
+					PushButton{
+						AssignTo: &attachBtn,
+						Text:     "Файл",
+						// Image:     loadIcon("file.ico"), <--- ЗАКОММЕНТИРОВАНО
+						OnClicked:   selectFiles,
+						ToolTipText: "Прикрепить файл",
 					},
 
 					CheckBox{
@@ -178,11 +273,19 @@ func CreateAndRunMainWindow() {
 						Text:     "Ctrl+Enter",
 						Checked:  cfg.SendCtrlEnter,
 					},
+
 					HSpacer{},
+
+					// Кнопка настроек
+					PushButton{
+						AssignTo: &settingsBtn,
+						Text:     "Настройки",
+						// Image:     loadIcon("settings.ico"), <--- ЗАКОММЕНТИРОВАНО
+						OnClicked: openSettings,
+					},
 				},
 			},
 
-			// Рабочая область
 			VSplitter{
 				Children: []Widget{
 					TextEdit{
@@ -191,20 +294,17 @@ func CreateAndRunMainWindow() {
 						VScroll:       true,
 						StretchFactor: 10,
 					},
-
 					Composite{
 						Layout:        VBox{MarginsZero: true},
 						StretchFactor: 1,
 						MinSize:       Size{Height: 100},
 						Children: []Widget{
-
 							Label{
 								AssignTo:  &filesLabel,
 								Text:      "",
 								Visible:   false,
 								TextColor: walk.RGB(0, 0, 150),
 							},
-
 							Composite{
 								Layout: HBox{MarginsZero: true},
 								Children: []Widget{
@@ -215,7 +315,6 @@ func CreateAndRunMainWindow() {
 											mods := walk.ModifiersDown()
 											isCtrlEnterMode := chkCtrlEnter.Checked()
 											shouldSend := false
-
 											if isCtrlEnterMode {
 												if key == walk.KeyReturn && mods == walk.ModControl {
 													shouldSend = true
@@ -225,7 +324,6 @@ func CreateAndRunMainWindow() {
 													shouldSend = true
 												}
 											}
-
 											if shouldSend {
 												doSend()
 												go func() {
