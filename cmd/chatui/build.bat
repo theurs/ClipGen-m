@@ -1,7 +1,7 @@
 @echo off
 echo Building ClipGen-m ChatUI...
 
-go build -o ClipGen-m-chatui.exe .
+go build -ldflags "-H=windowsgui" -o ClipGen-m-chatui.exe
 
 if %ERRORLEVEL% EQU 0 (
     echo Build completed successfully!

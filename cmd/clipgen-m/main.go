@@ -35,9 +35,10 @@ import (
 // ==========================================================
 
 var (
-	user32                     = syscall.NewLazyDLL("user32.dll")
-	kernel32                   = syscall.NewLazyDLL("kernel32.dll")
-	shell32                    = syscall.NewLazyDLL("shell32.dll")
+	user32   = syscall.NewLazyDLL("user32.dll")
+	kernel32 = syscall.NewLazyDLL("kernel32.dll")
+	shell32  = syscall.NewLazyDLL("shell32.dll")
+
 	openClipboard              = user32.NewProc("OpenClipboard")
 	closeClipboard             = user32.NewProc("CloseClipboard")
 	getClipboardData           = user32.NewProc("GetClipboardData")
@@ -48,11 +49,19 @@ var (
 	dragQueryFile              = shell32.NewProc("DragQueryFileW")
 	findWindow                 = user32.NewProc("FindWindowW")
 	setForegroundWindow        = user32.NewProc("SetForegroundWindow")
+
+	enumWindows              = user32.NewProc("EnumWindows")
+	getWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
+	sendMessageTimeoutW      = user32.NewProc("SendMessageTimeoutW")
 )
 
 const (
-	CF_HDROP = 15
-	CF_DIB   = 8
+	CF_HDROP         = 15
+	CF_DIB           = 8
+	WM_CLOSE         = 0x0010
+	SMTO_ABORTIFHUNG = 0x0002
+	// НОВЫЙ ФЛАГ: Для надежной регистрации глобальных хоткеев.
+	MOD_NOREPEAT = 0x4000
 )
 
 type BITMAPFILEHEADER struct {
@@ -63,14 +72,13 @@ type BITMAPFILEHEADER struct {
 	BfOffBits   uint32
 }
 
-// Безопасное открытие буфера с повторными попытками
 func tryOpenClipboard() (bool, error) {
-	for i := 0; i < 20; i++ { // Пытаемся 20 раз
+	for i := 0; i < 20; i++ {
 		r, _, _ := openClipboard.Call(0)
 		if r != 0 {
 			return true, nil
 		}
-		time.Sleep(10 * time.Millisecond) // Пауза 10мс между попытками
+		time.Sleep(10 * time.Millisecond)
 	}
 	return false, fmt.Errorf("не удалось открыть буфер обмена (занят другим приложением)")
 }
@@ -80,10 +88,12 @@ func tryOpenClipboard() (bool, error) {
 // ==========================================================
 
 type Config struct {
-	EditorPath      string   `yaml:"editor_path"`       // Путь к редактору
-	LLMPath         string   `yaml:"llm_path"`          // Путь к LLM
-	SystemPrompt    string   `yaml:"system_prompt"`     // Базовая инструкция
-	AppToggleHotkey string   `yaml:"app_toggle_hotkey"` // Глобальный хоткей Вкл/Выкл
+	EditorPath      string   `yaml:"editor_path"`
+	LLMPath         string   `yaml:"llm_path"`
+	SystemPrompt    string   `yaml:"system_prompt"`
+	AppToggleHotkey string   `yaml:"app_toggle_hotkey"`
+	ChatUIPath      string   `yaml:"chatui_path"`
+	ChatUIHotkey    string   `yaml:"chatui_hotkey"`
 	Actions         []Action `yaml:"actions"`
 }
 
@@ -96,24 +106,25 @@ type Action struct {
 	OutputMode  string `yaml:"output_mode,omitempty"`
 }
 
-// Структура для управления жизненным циклом горутины-слушателя
 type HotkeyControl struct {
 	hk   *hotkey.Hotkey
-	quit chan struct{} // Канал для сигнала "стоп"
+	quit chan struct{}
 }
 
 var (
 	iconNormal   []byte
 	iconWait     []byte
-	iconStop     []byte // Иконка для состояния "Отключено"
+	iconStop     []byte
 	config       Config
 	logFile      *os.File
 	inputHistory = make(map[string]string)
 
-	// Глобальные переменные для управления состоянием
 	hotkeyMutex   sync.Mutex
 	activeHotkeys []HotkeyControl
-	actionChan    = make(chan Action, 10) // Буферизированный канал для всех действий
+	actionChan    = make(chan Action, 10)
+
+	chatUIProcess *os.Process
+	chatUIMutex   sync.Mutex
 )
 
 // ==========================================================
@@ -141,12 +152,27 @@ func onReady() {
 		return
 	}
 	setupTray()
-	go actionProcessor() // Запускаем единый обработчик действий ОДИН РАЗ
-	enableHotkeys()      // Первичная регистрация при старте
+	go actionProcessor()
+	setupChatUIHotkey()
+	enableHotkeys()
 }
 
 func onExit() {
-	disableHotkeys() // Чистим за собой при выходе
+	chatUIMutex.Lock()
+	if chatUIProcess != nil {
+		log.Println("Завершение процесса Chat UI при выходе...")
+		hwnd, found := findWindowByPID(uint32(chatUIProcess.Pid))
+		if found {
+			var result uintptr
+			sendMessageTimeoutW.Call(uintptr(hwnd), WM_CLOSE, 0, 0, SMTO_ABORTIFHUNG, 1000, uintptr(unsafe.Pointer(&result)))
+		} else {
+			chatUIProcess.Kill()
+		}
+		chatUIProcess = nil
+	}
+	chatUIMutex.Unlock()
+
+	disableHotkeys()
 	log.Println("Завершение работы.")
 }
 
@@ -162,7 +188,6 @@ func setupLogging() {
 	var err error
 	logFile, err = os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
-		// Fallback если не удалось создать в папке пользователя
 		logFile, _ = os.OpenFile("clipgen.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	}
 	mw := io.MultiWriter(os.Stdout, logFile)
@@ -172,12 +197,8 @@ func setupLogging() {
 func openLogFile() {
 	configDir, _ := os.UserConfigDir()
 	logPath := filepath.Join(configDir, "clipgen-m", "clipgen.log")
-
-	// Используем редактор из конфига
 	cmd := exec.Command(config.EditorPath, logPath)
 	if err := cmd.Start(); err != nil {
-		log.Printf("Ошибка открытия лога через %s: %v", config.EditorPath, err)
-		// Fallback на обычный блокнот
 		exec.Command("notepad.exe", logPath).Start()
 	}
 }
@@ -185,12 +206,8 @@ func openLogFile() {
 func openConfigFile() {
 	configDir, _ := os.UserConfigDir()
 	configPath := filepath.Join(configDir, "clipgen-m", "config.yaml")
-
-	// Используем редактор из конфига
 	cmd := exec.Command(config.EditorPath, configPath)
 	if err := cmd.Start(); err != nil {
-		log.Printf("Ошибка открытия конфига через %s: %v", config.EditorPath, err)
-		// Fallback на обычный блокнот
 		exec.Command("notepad.exe", configPath).Start()
 	}
 }
@@ -199,7 +216,6 @@ func openConfigFile() {
 // ACTION HANDLER
 // ==========================================================
 
-// actionProcessor - это единственная горутина, которая читает из канала действий
 func actionProcessor() {
 	for action := range actionChan {
 		go handleAction(action)
@@ -246,12 +262,11 @@ func handleAction(action Action) {
 
 	log.Println("Успех. Вывод результата.")
 	switch action.OutputMode {
-	case "notepad", "editor": // Поддерживаем оба названия для удобства
+	case "notepad", "editor":
 		if err := showInEditor(resultText); err != nil {
 			log.Printf("Ошибка открытия редактора: %v", err)
 		}
 	default:
-		// Режим replace / copy
 		clipboard.Write(clipboard.FmtText, []byte(resultText))
 		time.Sleep(200 * time.Millisecond)
 		paste()
@@ -293,10 +308,8 @@ func switchLayout(text string) string {
 	var conversionMap map[rune]rune
 	if rusChars > engChars {
 		conversionMap = rusToEng
-	} else if engChars > rusChars {
-		conversionMap = engToRus
 	} else {
-		return text
+		conversionMap = engToRus
 	}
 	var builder strings.Builder
 	for _, r := range text {
@@ -388,10 +401,7 @@ func handleImageAction(action Action) (string, error) {
 
 func handleFilesAction(action Action) (string, error) {
 	files, err := getClipboardFiles()
-	if err != nil {
-		return "", err
-	}
-	if len(files) == 0 {
+	if err != nil || len(files) == 0 {
 		return "", fmt.Errorf("нет файлов в буфере")
 	}
 	return processFiles(files, action)
@@ -402,7 +412,7 @@ func processText(text string, action Action) (string, error) {
 	basePrompt := strings.Replace(action.Prompt, "{{.clipboard}}", text, 1)
 	finalPrompt, pErr := preparePrompt(basePrompt, action.Name)
 	if pErr != nil {
-		return "", nil
+		return "", nil // User canceled
 	}
 	return runLLM(finalPrompt, nil, action.MistralArgs)
 }
@@ -425,34 +435,14 @@ func processImage(imageBytes []byte, action Action) (string, error) {
 }
 
 func processFiles(files []string, action Action) (string, error) {
-	var finalFileList, audioFiles []string
+	var finalFileList []string
 	var imageExtensions = map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".bmp": true, ".webp": true}
 	for _, f := range files {
 		ext := strings.ToLower(filepath.Ext(f))
-		if ext == ".mp3" || ext == ".wav" || ext == ".m4a" || ext == ".ogg" || ext == ".flac" || ext == ".opus" {
-			audioFiles = append(audioFiles, f)
-		} else if imageExtensions[ext] {
+		if imageExtensions[ext] {
 			finalFileList = append(finalFileList, f)
 		} else {
 			finalFileList = append(finalFileList, f)
-		}
-	}
-	if len(audioFiles) > 0 {
-		log.Printf("Транскрипция аудио (%d)...", len(audioFiles))
-		for _, audioPath := range audioFiles {
-			prompt := "Transcribe this audio file to text verbatim. Output ONLY the text."
-			transText, err := runLLM(prompt, []string{audioPath}, "")
-			if err != nil {
-				transText = fmt.Sprintf("[Ошибка аудио %s]", filepath.Base(audioPath))
-			} else if strings.TrimSpace(transText) == "" {
-				transText = "[Пустая транскрипция]"
-			}
-			tempTxt, err := saveTextToTemp(transText)
-			if err != nil {
-				return "", err
-			}
-			defer os.Remove(tempTxt)
-			finalFileList = append(finalFileList, tempTxt)
 		}
 	}
 	finalPrompt, err := preparePrompt(action.Prompt, action.Name)
@@ -472,10 +462,7 @@ func isImageFile(path string) bool {
 		return false
 	}
 	info, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	if info.IsDir() {
+	if err != nil || info.IsDir() {
 		return false
 	}
 	ext := strings.ToLower(filepath.Ext(path))
@@ -512,7 +499,6 @@ func preparePrompt(promptTmpl string, actionName string) (string, error) {
 		}
 
 		inputHistory[actionName] = userInput
-
 		return strings.Replace(promptTmpl, "{{ask_user}}", userInput, 1), nil
 	}
 	return promptTmpl, nil
@@ -566,11 +552,7 @@ func getClipboardImageViaAPI() ([]byte, error) {
 	defer globalUnlock.Call(hMem)
 	memSize, _, _ := globalSize.Call(hMem)
 	dibData := make([]byte, memSize)
-
-	// Копирование данных из памяти Windows с использованием unsafe
-	// Это необходимый подход при работе с WinAPI для доступа к данным буфера обмена
 	if memSize > 0 {
-		// Преобразуем указатель в срез, используя unsafe
 		srcSlice := (*[1 << 30]byte)(unsafe.Pointer(pData))[:memSize:memSize]
 		copy(dibData, srcSlice)
 	}
@@ -693,7 +675,6 @@ func setupTray() {
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Выход", "Закрыть приложение")
 
-	// Регистрируем глобальный переключатель (если настроен)
 	toggleHotkeyCh, err := setupToggleHotkey()
 	if err != nil {
 		log.Printf("WARNING: %v", err)
@@ -702,21 +683,16 @@ func setupTray() {
 	go func() {
 		for {
 			select {
-			// Обработка клика по меню
 			case <-mToggle.ClickedCh:
 				if mToggle.Checked() {
-					// Если сейчас галочка стоит - значит выключаем
 					mToggle.Uncheck()
 					log.Println("Приложение деактивировано пользователем (Menu).")
 					disableHotkeys()
 				} else {
-					// Если галочки нет - включаем
 					mToggle.Check()
 					log.Println("Приложение активировано пользователем (Menu).")
 					enableHotkeys()
 				}
-
-			// Обработка глобального хоткея
 			case <-toggleHotkeyCh:
 				if mToggle.Checked() {
 					mToggle.Uncheck()
@@ -727,7 +703,6 @@ func setupTray() {
 					log.Println("Приложение активировано пользователем (Hotkey).")
 					enableHotkeys()
 				}
-
 			case <-mLog.ClickedCh:
 				openLogFile()
 			case <-mConfig.ClickedCh:
@@ -746,35 +721,126 @@ func setupTray() {
 func setupToggleHotkey() (chan struct{}, error) {
 	ch := make(chan struct{})
 	if config.AppToggleHotkey == "" {
-		return ch, nil // Хоткей не настроен
+		return ch, nil
 	}
-
 	mods, key, err := parseHotkey(config.AppToggleHotkey)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка парсинга ToggleHotkey: %v", err)
 	}
-
-	hk := hotkey.New(mods, key)
+	hk := hotkey.New([]hotkey.Modifier{hotkey.Modifier(mods)}, key)
 	if err := hk.Register(); err != nil {
 		return nil, fmt.Errorf("не удалось зарегистрировать ToggleHotkey: %v", err)
 	}
-
-	// Этот хоткей живет вечно, пока работает программа, и не управляется enable/disableHotkeys
 	go func() {
 		for range hk.Keydown() {
 			ch <- struct{}{}
 		}
 	}()
-
 	log.Printf("Зарегистрирован переключатель: %s", config.AppToggleHotkey)
 	return ch, nil
 }
 
-func restartApp() {
-	executable, err := os.Executable()
-	if err != nil {
+func findWindowByPID(pid uint32) (syscall.Handle, bool) {
+	var hwnd syscall.Handle
+	var found bool
+
+	cb := syscall.NewCallback(func(h syscall.Handle, p uintptr) uintptr {
+		var processID uint32
+		getWindowThreadProcessId.Call(uintptr(h), uintptr(unsafe.Pointer(&processID)))
+		if processID == pid {
+			hwnd = h
+			found = true
+			return 0
+		}
+		return 1
+	})
+
+	enumWindows.Call(cb, 0)
+	return hwnd, found
+}
+
+func setupChatUIHotkey() {
+	if config.ChatUIHotkey == "" {
 		return
 	}
+	mods, key, err := parseHotkey(config.ChatUIHotkey)
+	if err != nil {
+		log.Printf("WARNING: ошибка парсинга ChatUIHotkey: %v", err)
+		return
+	}
+	hk := hotkey.New([]hotkey.Modifier{hotkey.Modifier(mods)}, key)
+	if err := hk.Register(); err != nil {
+		log.Printf("WARNING: не удалось зарегистрировать ChatUIHotkey: %v", err)
+		return
+	}
+	go func() {
+		for range hk.Keydown() {
+			toggleChatUI()
+		}
+	}()
+	log.Printf("Зарегистрирован хоткей для чата: %s", config.ChatUIHotkey)
+}
+
+func toggleChatUI() {
+	chatUIMutex.Lock()
+	defer chatUIMutex.Unlock()
+
+	// Сценарий 1: Процесс запущен, нужно его закрыть
+	if chatUIProcess != nil {
+		log.Printf("[Действие] Процесс существует (PID: %d). Ищем его окно...", chatUIProcess.Pid)
+		hwnd, found := findWindowByPID(uint32(chatUIProcess.Pid))
+		if found {
+			// ИЗМЕНЕНИЕ: Двойная отправка сообщения для "упрямых" окон.
+			log.Printf(" -> Окно найдено. Отправка WM_CLOSE (попытка 1)...")
+			var result uintptr
+			sendMessageTimeoutW.Call(uintptr(hwnd), WM_CLOSE, 0, 0, SMTO_ABORTIFHUNG, 500, uintptr(unsafe.Pointer(&result)))
+
+			// Небольшая пауза, чтобы окно успело "проснуться"
+			time.Sleep(50 * time.Millisecond)
+
+			log.Printf(" -> Отправка WM_CLOSE (попытка 2)...")
+			sendMessageTimeoutW.Call(uintptr(hwnd), WM_CLOSE, 0, 0, SMTO_ABORTIFHUNG, 500, uintptr(unsafe.Pointer(&result)))
+			log.Println(" -> Команды на закрытие отправлены.")
+
+		} else {
+			log.Println(" -> Окно не найдено, но процесс существует (зомби?). Принудительное завершение.")
+			chatUIProcess.Kill()
+			chatUIProcess = nil
+		}
+		return
+	}
+
+	// Сценарий 2: Процесс не запущен, нужно его создать
+	log.Println("[Действие] Процесс не существует. Запускаем новый...")
+	cmd := exec.Command(chatUIPath)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+	}
+
+	if err := cmd.Start(); err != nil {
+		log.Printf(" -> Ошибка запуска: %v", err)
+		return
+	}
+
+	chatUIProcess = cmd.Process
+	log.Printf(" -> Процесс успешно запущен (PID: %d)", chatUIProcess.Pid)
+
+	// Горутина-наблюдатель для очистки состояния
+	go func(p *os.Process) {
+		log.Printf("[Наблюдатель] Следим за процессом PID %d", p.Pid)
+		p.Wait()
+		log.Printf("[Наблюдатель] Процесс PID %d завершился.", p.Pid)
+		chatUIMutex.Lock()
+		defer chatUIMutex.Unlock()
+		if chatUIProcess != nil && chatUIProcess.Pid == p.Pid {
+			log.Println("[Наблюдатель] Очищаем ссылку на процесс.")
+			chatUIProcess = nil
+		}
+	}(cmd.Process)
+}
+
+func restartApp() {
+	executable, _ := os.Executable()
 	cmd := exec.Command(executable)
 	cmd.Start()
 	systray.Quit()
@@ -794,104 +860,72 @@ func loadOrCreateConfig() error {
 	if err != nil {
 		return err
 	}
-
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		log.Println("Конфиг не найден, создание нового...")
 		os.MkdirAll(filepath.Dir(path), 0755)
-
 		defaultConfig := `
 # --- СИСТЕМНЫЕ НАСТРОЙКИ ---
-
-# Программа для открытия результатов (Блокнот, MarkText, VS Code)
 editor_path: "notepad.exe"
-
-# Утилита для запуска нейросети (mistral.exe, llama3.exe и т.д.)
 llm_path: "mistral.exe"
-
-# Базовая инструкция для нейросети
+app_toggle_hotkey: "Ctrl+F12"
+chatui_path: "ClipGen-m-chatui.exe"
+chatui_hotkey: "Ctrl+M"
 system_prompt: |
   Вы работаете в Windows-утилите ClipGen-m, которая помогает отправлять запросы к ИИ-моделям через буфер обмена.
   Используйте только обычный текст, маркдаун не разрешен.
-  Используйте табуляцию для разделения столбцов в таблицах, это необходимо для возможности вставки текста в Excel.
-  Не добавляйте вступительные заполнители.
-
-# Глобальный хоткей для Вкл/Выкл программы
-app_toggle_hotkey: "Ctrl+F12"
 
 actions:
-  # --- ЛОКАЛЬНЫЕ ДЕЙСТВИЯ (без ИИ) ---
   - name: "Сменить раскладку (Punto)"
     hotkey: "Pause"
     input_type: "layout_switch"
     output_mode: "replace"
-
-  # --- ТЕКСТ (с ИИ) ---
   - name: "Исправить текст (F1)"
     hotkey: "Ctrl+F1"
     prompt: |
-      Исправь грамматику, пунктуацию и стиль. Верни ТОЛЬКО исправленный текст. Не используй маркдаун в ответе, только простой текст.
+      Исправь грамматику, пунктуацию и стиль. Верни ТОЛЬКО исправленный текст.
       Текст: {{.clipboard}}
-    mistral_args: "-t 0.1"
     input_type: "text"
     output_mode: "replace"
-
   - name: "Выполнить просьбу (F2)"
     hotkey: "Ctrl+F2"
     prompt: "Выполни просьбу:\n{{.clipboard}}"
     input_type: "text"
     output_mode: "replace"
-
   - name: "Перевести и показать (F3)"
     hotkey: "Ctrl+F3"
-    prompt: "Переведи на русский. Верни только перевод. Не используй маркдаун в ответе, только простой текст.\n{{.clipboard}}"
+    prompt: "Переведи на русский. Верни только перевод.\n{{.clipboard}}"
     input_type: "auto"
     output_mode: "editor"
-
   - name: "Перевести и заменить (F4)"
     hotkey: "Ctrl+F4"
-    prompt: "Переведи на русский (если уже рус - на англ). Верни только перевод. Не используй маркдаун в ответе, только простой текст.\n{{.clipboard}}"
+    prompt: "Переведи на русский (если уже рус - на англ). Верни только перевод.\n{{.clipboard}}"
     input_type: "text"
     output_mode: "replace"
-
   - name: "Объяснить (AltF5)"
     hotkey: "Alt+F5"
-    prompt: "Объясни это простыми словами. Не используй маркдаун в ответе, только простой текст.\n{{.clipboard}}"
+    prompt: "Объясни это простыми словами.\n{{.clipboard}}"
     input_type: "auto"
     output_mode: "editor"
-
-  # --- ИЗОБРАЖЕНИЯ (конкретная задача с ИИ) ---
   - name: "OCR / Текст с картинки (F6)"
     hotkey: "Ctrl+F6"
-    prompt: "Извлеки весь текст с изображения. Верни только текст. То есть выполни работу OCR. Не используй маркдаун в ответе, только простой текст."
+    prompt: "Извлеки весь текст с изображения. Верни только текст."
     input_type: "auto"
     output_mode: "editor"
-
-  # --- ФАЙЛЫ (конкретная задача с ИИ) ---
   - name: "Сделать саммари из файлов (F7)"
     hotkey: "Ctrl+F7"
-    prompt: |
-      Сделай краткое саммари по всем предоставленным файлам. Не используй маркдаун в ответе, только простой текст.
-      Структурируй ответ, используй списки.
+    prompt: "Сделай краткое саммари по всем предоставленным файлам."
     input_type: "files"
     output_mode: "editor"
-
-  # --- УНИВЕРСАЛЬНЫЙ РЕЖИМ (с окном ввода, с ИИ) ---
   - name: "Умный анализ (F8)"
     hotkey: "Ctrl+F8"
     prompt: |
-      Проанализируй данные из буфера обмена. Не используй маркдаун в ответе, только простой текст.
-      
-      ДАННЫЕ:
-      {{.clipboard}}
-      
-      ЗАДАЧА ПОЛЬЗОВАТЕЛЯ:
-      {{ask_user}}
+      Проанализируй данные из буфера обмена.
+      ДАННЫЕ: {{.clipboard}}
+      ЗАДАЧА ПОЛЬЗОВАТЕЛЯ: {{ask_user}}
     input_type: "auto"
     output_mode: "editor"`
-
 		os.WriteFile(path, []byte(strings.TrimSpace(defaultConfig)), 0644)
 	}
-
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -900,17 +934,13 @@ actions:
 }
 
 func loadIcons() {
-	exePath, err := os.Executable()
-	if err == nil {
-		dir := filepath.Dir(exePath)
-		iconNormal, _ = os.ReadFile(filepath.Join(dir, "icon.ico"))
-		iconWait, _ = os.ReadFile(filepath.Join(dir, "icon_wait.ico"))
-		iconStop, _ = os.ReadFile(filepath.Join(dir, "icon_stop.ico"))
-	}
+	exePath, _ := os.Executable()
+	dir := filepath.Dir(exePath)
+	iconNormal, _ = os.ReadFile(filepath.Join(dir, "icon.ico"))
+	iconWait, _ = os.ReadFile(filepath.Join(dir, "icon_wait.ico"))
+	iconStop, _ = os.ReadFile(filepath.Join(dir, "icon_stop.ico"))
 	if len(iconNormal) == 0 {
 		iconNormal, _ = os.ReadFile("icon.ico")
-		iconWait, _ = os.ReadFile("icon_wait.ico")
-		iconStop, _ = os.ReadFile("icon_stop.ico")
 	}
 	if len(iconWait) == 0 {
 		iconWait = iconNormal
@@ -923,53 +953,38 @@ func loadIcons() {
 func disableHotkeys() {
 	hotkeyMutex.Lock()
 	defer hotkeyMutex.Unlock()
-
-	// Визуальная индикация отключения
 	systray.SetIcon(iconStop)
 	systray.SetTooltip("ClipGen-m: Отключено")
-
 	if len(activeHotkeys) == 0 {
 		return
 	}
 	log.Println("Отмена регистрации горячих клавиш...")
 	for _, control := range activeHotkeys {
-		// 1. Вежливо просим горутину завершиться, закрывая канал
 		close(control.quit)
-		// 2. Отменяем регистрацию клавиши в системе
 		control.hk.Unregister()
 	}
-	activeHotkeys = nil // Очищаем срез
+	activeHotkeys = nil
 }
 
 func enableHotkeys() {
 	hotkeyMutex.Lock()
 	defer hotkeyMutex.Unlock()
-
-	// Визуальная индикация включения
 	systray.SetIcon(iconNormal)
 	systray.SetTooltip("ClipGen-m: Активен")
-
-	// Эта функция теперь ТОЛЬКО регистрирует.
 	log.Println("Регистрация горячих клавиш...")
-
 	for _, action := range config.Actions {
 		mods, key, err := parseHotkey(action.Hotkey)
 		if err != nil {
 			log.Printf("Ошибка хоткея '%s': %v", action.Hotkey, err)
 			continue
 		}
-		hk := hotkey.New(mods, key)
+		hk := hotkey.New([]hotkey.Modifier{hotkey.Modifier(mods)}, key)
 		if err := hk.Register(); err != nil {
 			log.Printf("Не удалось зарегистрировать '%s': %v", action.Hotkey, err)
 			continue
 		}
-
-		control := HotkeyControl{
-			hk:   hk,
-			quit: make(chan struct{}),
-		}
+		control := HotkeyControl{hk: hk, quit: make(chan struct{})}
 		activeHotkeys = append(activeHotkeys, control)
-
 		go func(a Action, c HotkeyControl) {
 			for {
 				select {
@@ -983,9 +998,11 @@ func enableHotkeys() {
 	}
 }
 
-func parseHotkey(hotkeyStr string) ([]hotkey.Modifier, hotkey.Key, error) {
+// ИЗМЕНЕНИЕ: Функция теперь возвращает uint32 для модификаторов и использует флаг MOD_NOREPEAT
+// ИЗМЕНЕНИЕ: Исправлена ошибка типов при смешивании uint32 и hotkey.Modifier
+func parseHotkey(hotkeyStr string) (uint32, hotkey.Key, error) {
 	parts := strings.Split(hotkeyStr, "+")
-	var mods []hotkey.Modifier
+	var mods uint32
 	var key hotkey.Key
 	keyMap := map[string]hotkey.Key{
 		"F1": hotkey.KeyF1, "F2": hotkey.KeyF2, "F3": hotkey.KeyF3, "F4": hotkey.KeyF4,
@@ -993,31 +1010,36 @@ func parseHotkey(hotkeyStr string) ([]hotkey.Modifier, hotkey.Key, error) {
 		"F9": hotkey.KeyF9, "F10": hotkey.KeyF10, "F11": hotkey.KeyF11, "F12": hotkey.KeyF12,
 		"PAUSE": hotkey.Key(19),
 	}
+	for i := 0; i < 26; i++ {
+		char := string(rune('A' + i))
+		keyMap[char] = hotkey.Key(0x41 + i)
+	}
 	for i, part := range parts {
 		part = strings.TrimSpace(strings.ToUpper(part))
 		if i == len(parts)-1 {
 			if k, ok := keyMap[part]; ok {
 				key = k
 			} else {
-				return nil, 0, fmt.Errorf("неизвестная клавиша: %s", part)
+				return 0, 0, fmt.Errorf("неизвестная клавиша: %s", part)
 			}
 		} else {
 			switch part {
+			// ИСПРАВЛЕНИЕ: Добавлено явное приведение типа к uint32
 			case "CTRL":
-				mods = append(mods, hotkey.ModCtrl)
+				mods |= uint32(hotkey.ModCtrl)
 			case "SHIFT":
-				mods = append(mods, hotkey.ModShift)
+				mods |= uint32(hotkey.ModShift)
 			case "ALT":
-				mods = append(mods, hotkey.ModAlt)
+				mods |= uint32(hotkey.ModAlt)
 			case "WIN":
-				mods = append(mods, hotkey.ModWin)
+				mods |= uint32(hotkey.ModWin)
 			default:
-				return nil, 0, fmt.Errorf("неизвестный модификатор: %s", part)
+				return 0, 0, fmt.Errorf("неизвестный модификатор: %s", part)
 			}
 		}
 	}
 	if key == 0 {
-		return nil, 0, fmt.Errorf("клавиша не указана в хоткее")
+		return 0, 0, fmt.Errorf("клавиша не указана в хоткее")
 	}
-	return mods, key, nil
+	return mods | MOD_NOREPEAT, key, nil
 }
