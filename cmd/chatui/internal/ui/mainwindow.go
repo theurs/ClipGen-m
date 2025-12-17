@@ -291,9 +291,9 @@ func CreateAndRunMainWindow() {
 					VSpacer{Size: 10},
 					PushButton{Text: "Файл", OnClicked: selectFiles},
 					CheckBox{
-						AssignTo: &chkCtrlEnter,
-						Text: "Ctrl+Enter",
-						Checked: cfg.SendCtrlEnter,
+						AssignTo:         &chkCtrlEnter,
+						Text:             "Ctrl+Enter",
+						Checked:          cfg.SendCtrlEnter,
 						OnCheckedChanged: saveConfigImmediately,
 					},
 					HSpacer{},
@@ -422,6 +422,9 @@ func CreateAndRunMainWindow() {
 		// but we save once more on close to ensure everything is up to date
 		saveConfigImmediately()
 	})
+
+	// Устанавливаем фокус на поле ввода перед запуском
+	inputTE.SetFocus()
 
 	mainWindow.Run()
 }

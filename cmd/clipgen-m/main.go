@@ -160,13 +160,11 @@ func onReady() {
 func onExit() {
 	chatUIMutex.Lock()
 	if chatUIProcess != nil {
-		log.Println("Завершение процесса Chat UI при выходе...")
-		hwnd, found := findWindowByPID(uint32(chatUIProcess.Pid))
-		if found {
-			var result uintptr
-			sendMessageTimeoutW.Call(uintptr(hwnd), WM_CLOSE, 0, 0, SMTO_ABORTIFHUNG, 1000, uintptr(unsafe.Pointer(&result)))
-		} else {
-			chatUIProcess.Kill()
+		log.Println("Завершение процесса Chat UI при выходе (KILL)...")
+		// Жесткое убийство при выходе из программы
+		err := chatUIProcess.Kill()
+		if err != nil {
+			log.Printf("Ошибка при убийстве процесса: %v", err)
 		}
 		chatUIProcess = nil
 	}
@@ -785,36 +783,25 @@ func toggleChatUI() {
 	chatUIMutex.Lock()
 	defer chatUIMutex.Unlock()
 
-	// Сценарий 1: Процесс запущен, нужно его закрыть
+	// Сценарий 1: Процесс запущен, нужно его жестко убить
 	if chatUIProcess != nil {
-		log.Printf("[Действие] Процесс существует (PID: %d). Ищем его окно...", chatUIProcess.Pid)
-		hwnd, found := findWindowByPID(uint32(chatUIProcess.Pid))
-		if found {
-			// ИЗМЕНЕНИЕ: Двойная отправка сообщения для "упрямых" окон.
-			log.Printf(" -> Окно найдено. Отправка WM_CLOSE (попытка 1)...")
-			var result uintptr
-			sendMessageTimeoutW.Call(uintptr(hwnd), WM_CLOSE, 0, 0, SMTO_ABORTIFHUNG, 500, uintptr(unsafe.Pointer(&result)))
-
-			// Небольшая пауза, чтобы окно успело "проснуться"
-			time.Sleep(50 * time.Millisecond)
-
-			log.Printf(" -> Отправка WM_CLOSE (попытка 2)...")
-			sendMessageTimeoutW.Call(uintptr(hwnd), WM_CLOSE, 0, 0, SMTO_ABORTIFHUNG, 500, uintptr(unsafe.Pointer(&result)))
-			log.Println(" -> Команды на закрытие отправлены.")
-
-		} else {
-			log.Println(" -> Окно не найдено, но процесс существует (зомби?). Принудительное завершение.")
-			chatUIProcess.Kill()
-			chatUIProcess = nil
+		log.Printf("[Действие] Убиваем процесс ChatUI (PID: %d)", chatUIProcess.Pid)
+		// Убиваем процесс
+		if err := chatUIProcess.Kill(); err != nil {
+			log.Printf(" -> Ошибка Kill: %v", err)
 		}
+		// Сразу обнуляем переменную, не дожидаясь наблюдателя,
+		// чтобы интерфейс был отзывчивым
+		chatUIProcess = nil
 		return
 	}
 
-	// Сценарий 2: Процесс не запущен, нужно его создать
+	// Сценарий 2: Процесс не запущен, запускаем
 	log.Println("[Действие] Процесс не существует. Запускаем новый...")
-	cmd := exec.Command(chatUIPath)
+	// Используем путь из конфига!
+	cmd := exec.Command(config.ChatUIPath)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+		CreationFlags: 0x08000000, // CREATE_NO_WINDOW (если это консольное приложение)
 	}
 
 	if err := cmd.Start(); err != nil {
@@ -825,17 +812,16 @@ func toggleChatUI() {
 	chatUIProcess = cmd.Process
 	log.Printf(" -> Процесс успешно запущен (PID: %d)", chatUIProcess.Pid)
 
-	// Горутина-наблюдатель для очистки состояния
+	// Горутина-наблюдатель для очистки (на случай, если пользователь закроет окно руками)
 	go func(p *os.Process) {
-		log.Printf("[Наблюдатель] Следим за процессом PID %d", p.Pid)
 		p.Wait()
-		log.Printf("[Наблюдатель] Процесс PID %d завершился.", p.Pid)
 		chatUIMutex.Lock()
-		defer chatUIMutex.Unlock()
+		// Проверяем, что это тот самый процесс, а не новый, запущенный после перезапуска
 		if chatUIProcess != nil && chatUIProcess.Pid == p.Pid {
-			log.Println("[Наблюдатель] Очищаем ссылку на процесс.")
+			log.Println("[Наблюдатель] Процесс завершился, очищаем переменную.")
 			chatUIProcess = nil
 		}
+		chatUIMutex.Unlock()
 	}(cmd.Process)
 }
 
