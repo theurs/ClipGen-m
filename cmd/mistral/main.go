@@ -208,6 +208,7 @@ var (
 	flagClearChat string
 	flagTools     bool
 	flagNoTools   bool
+	flagAddTavilyKey string
 )
 
 func init() {
@@ -224,12 +225,23 @@ func init() {
 	flag.StringVar(&flagClearChat, "clear-chat", "", "Очистить историю указанного чата")
 	flag.BoolVar(&flagTools, "tools", false, "Включить режим вызова инструментов (устаревший, инструменты теперь включены по умолчанию)")
 	flag.BoolVar(&flagNoTools, "no-tools", false, "Отключить режим вызова инструментов")
+	flag.StringVar(&flagAddTavilyKey, "add-tavily-key", "", "Добавить Tavily API ключ и выйти")
 }
 
 // --- Main ---
 
 func main() {
 	flag.Parse()
+
+	// Check if we're adding a Tavily key
+	if flagAddTavilyKey != "" {
+		err := addTavilyKey(flagAddTavilyKey)
+		if err != nil {
+			fatal("Ошибка добавления Tavily ключа: %v", err)
+		}
+		fmt.Printf("Tavily ключ добавлен в %s\n", getTavilyConfigPath())
+		return
+	}
 
 	// 1. Работа с конфигом
 	configPath, err := getConfigPath()
@@ -460,12 +472,224 @@ func createCalculatorTool() Tool {
 	}
 }
 
+func createTavilyTool() Tool {
+	return Tool{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "tavily_search",
+			Description: "Performs web searches to get current information on various topics",
+			Parameters: struct {
+				Type       string                 `json:"type"`
+				Properties map[string]interface{} `json:"properties"`
+				Required   []string               `json:"required"`
+			}{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"query": map[string]interface{}{
+						"type":        "string",
+						"description": "Search query for finding current information",
+					},
+				},
+				Required: []string{"query"},
+			},
+		},
+	}
+}
+
+// executeTavilySearch performs web search using Tavily API
+func executeTavilySearch(query string) (string, error) {
+	// Get the path to tavily.conf
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("error getting config directory: %v", err)
+	}
+
+	configPath := filepath.Join(configDir, "clipgen-m", "tavily.conf")
+
+	// Read the config file
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return "", fmt.Errorf("error reading tavily config: %v", err)
+	}
+
+	var config struct {
+		ApiKeys []string `json:"api_keys"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return "", fmt.Errorf("error parsing tavily config: %v", err)
+	}
+
+	if len(config.ApiKeys) == 0 {
+		return "", fmt.Errorf("no API keys found in tavily.conf")
+	}
+
+	// Shuffle the API keys randomly to distribute usage
+	shuffledKeys := make([]string, len(config.ApiKeys))
+	copy(shuffledKeys, config.ApiKeys)
+
+	// Create a new random source for shuffling
+	rand.Seed(time.Now().UnixNano())
+	for i := len(shuffledKeys) - 1; i > 0; i-- {
+		j := rand.Intn(i + 1)
+		shuffledKeys[i], shuffledKeys[j] = shuffledKeys[j], shuffledKeys[i]
+	}
+
+	// Try each API key until one works
+	var lastError error
+	for _, apiKey := range shuffledKeys {
+		if apiKey == "" {
+			continue
+		}
+
+		// Prepare the request payload
+		payload := map[string]interface{}{
+			"api_key":           apiKey,
+			"query":             query,
+			"search_depth":      "basic",
+			"include_images":    false,
+			"include_answer":    true,
+			"include_raw_content": false,
+			"max_results":       3, // Limiting results to avoid context overload
+		}
+
+		// Convert payload to JSON
+		jsonData, err := json.Marshal(payload)
+		if err != nil {
+			continue // Try next key
+		}
+
+		// Make the request to Tavily API
+		resp, err := http.Post(
+			"https://api.tavily.com/search",
+			"application/json",
+			bytes.NewBuffer(jsonData),
+		)
+		if err != nil {
+			lastError = err
+			continue // Try next key
+		}
+		defer resp.Body.Close()
+
+		// Read the response
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			lastError = err
+			continue // Try next key
+		}
+
+		// Parse the response
+		var searchResp map[string]interface{}
+		err = json.Unmarshal(body, &searchResp)
+		if err != nil {
+			lastError = err
+			continue // Try next key
+		}
+
+		// Check if the request was successful
+		if errStr, hasError := searchResp["error"].(string); !hasError || errStr == "" {
+			// Extract answer and results
+			var resultStrings []string
+
+			if answer, ok := searchResp["answer"].(string); ok && answer != "" {
+				resultStrings = append(resultStrings, fmt.Sprintf("Summary: %s", answer))
+			}
+
+			if results, ok := searchResp["results"].([]interface{}); ok {
+				// Limit to top 2 results to avoid context overload
+				maxResults := 2
+				if len(results) < maxResults {
+					maxResults = len(results)
+				}
+
+				for i := 0; i < maxResults; i++ {
+					if result, ok := results[i].(map[string]interface{}); ok {
+						if title, hasTitle := result["title"].(string); hasTitle {
+							if url, hasUrl := result["url"].(string); hasUrl {
+								content := ""
+								if cont, hasCont := result["content"].(string); hasCont {
+									// Limit content length to avoid context overload
+									if len(cont) > 4000 {
+										cont = cont[:4000] + "..."
+									}
+									content = fmt.Sprintf(" - %s", cont)
+								}
+								resultStrings = append(resultStrings, fmt.Sprintf("%d. [%s](%s)%s", i+1, title, url, content))
+							}
+						}
+					}
+				}
+			}
+
+			return strings.Join(resultStrings, "\n"), nil
+		} else {
+			// Check if the error is related to the API key
+			lastError = fmt.Errorf("API error: %s", errStr)
+		}
+	}
+
+	if lastError != nil {
+		return "", fmt.Errorf("all API keys failed: %v", lastError)
+	}
+
+	return "", fmt.Errorf("all API keys failed without specific error")
+}
+
 func executeCalculator(expression string) (string, error) {
-	// Execute the Lua script using our lua-executor utility
+	// Try to find lua-executor.exe in various locations
+
+	// First, try local directory
+	localPath := "./lua-executor/lua-executor.exe"
+	if _, err := os.Stat(localPath); err == nil {
+		cmd := exec.Command(localPath, expression)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+
+		err = cmd.Run()
+		if err != nil {
+			return "", fmt.Errorf("error executing calculator binary (%s): %v, stderr: %s", localPath, err, stderr.String())
+		}
+
+		return strings.TrimSpace(stdout.String()), nil
+	}
+
+	// Second, try executable in current directory
+	currentDirPath := "./lua-executor.exe"
+	if _, err := os.Stat(currentDirPath); err == nil {
+		cmd := exec.Command(currentDirPath, expression)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+
+		err = cmd.Run()
+		if err != nil {
+			return "", fmt.Errorf("error executing calculator binary (%s): %v, stderr: %s", currentDirPath, err, stderr.String())
+		}
+
+		return strings.TrimSpace(stdout.String()), nil
+	}
+
+	// Third, try to find lua-executor.exe in PATH
+	luaExecPath, err := exec.LookPath("lua-executor.exe")
+	if err == nil {
+		cmd := exec.Command(luaExecPath, expression)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+
+		err = cmd.Run()
+		if err != nil {
+			return "", fmt.Errorf("error executing calculator binary (%s): %v, stderr: %s", luaExecPath, err, stderr.String())
+		}
+
+		return strings.TrimSpace(stdout.String()), nil
+	}
+
+	// Fallback: try to execute with go run
 	cmd := fmt.Sprintf("cd lua-executor && go run main.go \"%s\"", expression)
 	out, err := runCommand(cmd)
 	if err != nil {
-		return "", fmt.Errorf("error executing calculator: %v", err)
+		return "", fmt.Errorf("error executing calculator (fallback method): %v", err)
 	}
 	return strings.TrimSpace(out), nil
 }
@@ -559,9 +783,10 @@ func requestChatWithTools(apiKey, baseURL, model, systemPrompt, userText string,
 
 	messages = append(messages, ChatMessage{Role: "user", Content: content})
 
-	// Create the calculator tool
+	// Create the tools
 	calculatorTool := createCalculatorTool()
-	tools := []Tool{calculatorTool}
+	tavilyTool := createTavilyTool()
+	tools := []Tool{calculatorTool, tavilyTool}
 
 	// Maximum number of tool call iterations to prevent infinite loops
 	maxIterations := 5
@@ -631,10 +856,40 @@ func requestChatWithTools(apiKey, baseURL, model, systemPrompt, userText string,
 						return "", fmt.Errorf("expression argument is not a string")
 					}
 
+					logVerbose("Executing calculator tool with expression: %s", expression)
 					result, err := executeCalculator(expression)
 					if err != nil {
 						return "", fmt.Errorf("error executing calculator: %v", err)
 					}
+
+					logVerbose("Calculator result: %s", result[:min(len(result), 500)]) // Log first 500 chars of result
+
+					// Add the tool result to the conversation
+					toolResultMsg := ChatMessage{
+						Role:       "tool",
+						Content:    result,
+						ToolCallID: toolCall.ID,
+					}
+					messages = append(messages, toolResultMsg)
+				} else if toolCall.Function.Name == "tavily_search" {
+					var args map[string]interface{}
+					if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
+						return "", fmt.Errorf("error parsing tool arguments: %v", err)
+					}
+
+					// Convert the query to string - args["query"] is interface{}
+					query, ok := args["query"].(string)
+					if !ok {
+						return "", fmt.Errorf("query argument is not a string")
+					}
+
+					logVerbose("Executing tavily search tool with query: %s", query)
+					result, err := executeTavilySearch(query)
+					if err != nil {
+						return "", fmt.Errorf("error executing tavily search: %v", err)
+					}
+
+					logVerbose("Tavily result: %s", result[:min(len(result), 500)]) // Log first 500 chars of result
 
 					// Add the tool result to the conversation
 					toolResultMsg := ChatMessage{
@@ -814,9 +1069,10 @@ func requestChatWithToolsHistory(apiKey, baseURL, model, systemPrompt, userText 
 	currentContent := formatChatContent(userText, files)
 	messages = append(messages, ChatMessage{Role: "user", Content: currentContent})
 
-	// Create the calculator tool
+	// Create the tools
 	calculatorTool := createCalculatorTool()
-	tools := []Tool{calculatorTool}
+	tavilyTool := createTavilyTool()
+	tools := []Tool{calculatorTool, tavilyTool}
 
 	// Maximum number of tool call iterations to prevent infinite loops
 	maxIterations := 5
@@ -885,10 +1141,40 @@ func requestChatWithToolsHistory(apiKey, baseURL, model, systemPrompt, userText 
 						return "", fmt.Errorf("expression argument is not a string")
 					}
 
+					logVerbose("Executing calculator tool with expression: %s", expression)
 					result, err := executeCalculator(expression)
 					if err != nil {
 						return "", fmt.Errorf("error executing calculator: %v", err)
 					}
+
+					logVerbose("Calculator result: %s", result[:min(len(result), 500)]) // Log first 500 chars of result
+
+					// Add the tool result to the conversation
+					toolResultMsg := ChatMessage{
+						Role:       "tool",
+						Content:    result,
+						ToolCallID: toolCall.ID,
+					}
+					messages = append(messages, toolResultMsg)
+				} else if toolCall.Function.Name == "tavily_search" {
+					var args map[string]interface{}
+					if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
+						return "", fmt.Errorf("error parsing tool arguments: %v", err)
+					}
+
+					// Convert the query to string - args["query"] is interface{}
+					query, ok := args["query"].(string)
+					if !ok {
+						return "", fmt.Errorf("query argument is not a string")
+					}
+
+					logVerbose("Executing tavily search tool with query: %s", query)
+					result, err := executeTavilySearch(query)
+					if err != nil {
+						return "", fmt.Errorf("error executing tavily search: %v", err)
+					}
+
+					logVerbose("Tavily result: %s", result[:min(len(result), 500)]) // Log first 500 chars of result
 
 					// Add the tool result to the conversation
 					toolResultMsg := ChatMessage{
@@ -1526,4 +1812,68 @@ func applyHistoryLimits(history *ChatHistory, maxMessages, maxChars int) {
 		history.Messages = history.Messages[1:]
 		totalSize -= removedMsg.Size
 	}
+}
+
+func getTavilyConfigPath() string {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(configDir, "clipgen-m", "tavily.conf")
+}
+
+func addTavilyKey(newKey string) error {
+	configPath := getTavilyConfigPath()
+
+	// Ensure directory exists
+	configDir := filepath.Dir(configPath)
+	if _, err := os.Stat(configDir); os.IsNotExist(err) {
+		_ = os.MkdirAll(configDir, 0755)
+	}
+
+	// Load existing config or create new one
+	var config struct {
+		ApiKeys []string `json:"api_keys"`
+	}
+
+	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+		// Read existing config
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			return err
+		}
+
+		if err := json.Unmarshal(data, &config); err != nil {
+			return err
+		}
+	}
+
+	// Check if key already exists
+	for _, existingKey := range config.ApiKeys {
+		if existingKey == newKey {
+			return fmt.Errorf("ключ уже существует в конфигурации")
+		}
+	}
+
+	// Add new key
+	config.ApiKeys = append(config.ApiKeys, newKey)
+
+	// Write back to file
+	file, err := os.Create(configPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(config)
+}
+
+// Helper function for min
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
