@@ -859,7 +859,7 @@ chatui_hotkey: "Ctrl+M"
 system_prompt: |
   Вы работаете в Windows-утилите ClipGen-m, которая помогает отправлять запросы к ИИ-моделям через буфер обмена.
   Используйте табуляцию для разделения столбцов в таблицах, это необходимо для возможности вставки текста в Excel.
-  Не добавляйте вступительные заполнители.
+  Не добавляйте вступительные заполнители. Используй простой текст без маркдауна.
 
 actions:
   - name: "Сменить раскладку (Punto)"
@@ -888,20 +888,10 @@ actions:
     prompt: "Переведи на русский (если уже рус - на англ). Верни только перевод.\n{{.clipboard}}"
     input_type: "text"
     output_mode: "replace"
-  - name: "Объяснить (AltF5)"
-    hotkey: "Alt+F5"
-    prompt: "Объясни это простыми словами.\n{{.clipboard}}"
-    input_type: "auto"
-    output_mode: "editor"
   - name: "OCR / Текст с картинки (F6)"
     hotkey: "Ctrl+F6"
     prompt: "Извлеки весь текст с изображения. Верни только текст."
     input_type: "auto"
-    output_mode: "editor"
-  - name: "Сделать саммари из файлов (F7)"
-    hotkey: "Ctrl+F7"
-    prompt: "Сделай краткое саммари по всем предоставленным файлам."
-    input_type: "files"
     output_mode: "editor"
   - name: "Умный анализ (F8)"
     hotkey: "Ctrl+F8"

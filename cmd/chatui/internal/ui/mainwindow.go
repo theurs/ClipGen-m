@@ -74,6 +74,9 @@ func CreateAndRunMainWindow() {
 	// To prevent too frequent saving when window is being moved/resized rapidly
 	var lastSaveTime time.Time
 
+	// Variable to store all chat history for proper line break handling
+	var fullChatHistory string
+
 	// Helper function to save config immediately to avoid losing changes if app crashes
 	saveConfigImmediately := func() {
 		// Prevent saving more than once per 100ms to avoid excessive disk writes during window movement
@@ -93,9 +96,17 @@ func CreateAndRunMainWindow() {
 
 	appendHistory := func(author, text string) {
 		currentTime := time.Now().Format("02.01.2006 15:04")
-		msg := fmt.Sprintf("%s [%s]:\r\n%s\r\n\r\n", author, currentTime, text)
-		historyTE.AppendText(msg)
-		historyTE.SendMessage(277, 7, 0)
+		newEntry := fmt.Sprintf("%s [%s]:\r\n%s\r\n\r\n", author, currentTime, text)
+		fullChatHistory += newEntry
+		// Ensure proper line endings for Windows
+		displayText := strings.ReplaceAll(fullChatHistory, "\n", "\r\n")
+		displayText = strings.ReplaceAll(displayText, "\r\r\n", "\r\n") // avoid double CR
+		historyTE.SetText(displayText)
+
+		// Use Synchronize to ensure scroll happens after UI updates
+		mainWindow.Synchronize(func() {
+			historyTE.SendMessage(277, 7, 0)  // WM_VSCROLL with SB_BOTTOM
+		})
 	}
 
 	updateFilesVisibility := func() {
@@ -107,11 +118,19 @@ func CreateAndRunMainWindow() {
 		chatID := chatCombo.Text()
 		if chatID == "" {
 			historyTE.SetText("")
+			fullChatHistory = ""
 			return
 		}
 		text := chat.LoadHistory(chatID)
-		historyTE.SetText(text)
-		historyTE.SendMessage(277, 7, 0)
+		// Ensure proper line endings for Windows
+		fullChatHistory = strings.ReplaceAll(text, "\n", "\r\n")
+		fullChatHistory = strings.ReplaceAll(fullChatHistory, "\r\r\n", "\r\n") // avoid double CR
+		historyTE.SetText(fullChatHistory)
+
+		// Use Synchronize to ensure scroll happens after UI updates
+		mainWindow.Synchronize(func() {
+			historyTE.SendMessage(277, 7, 0)  // WM_VSCROLL with SB_BOTTOM
+		})
 	}
 
 	deleteCurrentChat := func() {
@@ -135,6 +154,7 @@ func CreateAndRunMainWindow() {
 		currentChatID := chatCombo.Text()
 		if walk.MsgBox(mainWindow, "Очистка", "Очистить историю?", walk.MsgBoxYesNo) == walk.DlgCmdYes {
 			_ = chat.DeleteChat(currentChatID)
+			fullChatHistory = ""
 			historyTE.SetText("")
 			appendHistory("Система", "История очищена.")
 		}
@@ -265,6 +285,9 @@ func CreateAndRunMainWindow() {
 		}
 	}
 
+	// Define larger font with 12pt size
+	font12 := Font{Family: "Microsoft Sans Serif", PointSize: 12}
+
 	// --- UI ---
 
 	err := MainWindow{
@@ -272,12 +295,13 @@ func CreateAndRunMainWindow() {
 		Title:    "ClipGen-m ChatUI",
 		Bounds:   Rectangle{X: cfg.X, Y: cfg.Y, Width: cfg.Width, Height: cfg.Height},
 		Layout:   VBox{},
+		Font:     font12,
 		Children: []Widget{
 
 			Composite{
 				Layout: HBox{},
 				Children: []Widget{
-					Label{Text: "Чат:"},
+					Label{Text: "Чат:", Font: font12},
 					ComboBox{
 						AssignTo:              &chatCombo,
 						Editable:              true,
@@ -285,19 +309,21 @@ func CreateAndRunMainWindow() {
 						OnCurrentIndexChanged: func() { loadSelectedChat() },
 						OnEditingFinished:     func() { loadSelectedChat() },
 						MinSize:               Size{Width: 150},
+						Font:                  font12,
 					},
-					PushButton{Text: "Del", OnClicked: deleteCurrentChat, MaxSize: Size{Width: 40}},
-					PushButton{Text: "Clr", OnClicked: clearHistory, MaxSize: Size{Width: 40}},
+					PushButton{Text: "Del", OnClicked: deleteCurrentChat, MaxSize: Size{Width: 40}, Font: font12},
+					PushButton{Text: "Clr", OnClicked: clearHistory, MaxSize: Size{Width: 40}, Font: font12},
 					VSpacer{Size: 10},
-					PushButton{Text: "Файл", OnClicked: selectFiles},
+					PushButton{Text: "Файл", OnClicked: selectFiles, Font: font12},
 					CheckBox{
 						AssignTo:         &chkCtrlEnter,
 						Text:             "Ctrl+Enter",
 						Checked:          cfg.SendCtrlEnter,
 						OnCheckedChanged: saveConfigImmediately,
+						Font:             font12,
 					},
 					HSpacer{},
-					PushButton{Text: "Настройки", OnClicked: openSettings},
+					PushButton{Text: "Настройки", OnClicked: openSettings, Font: font12},
 				},
 			},
 
@@ -308,6 +334,7 @@ func CreateAndRunMainWindow() {
 						ReadOnly:      true,
 						VScroll:       true,
 						StretchFactor: 10,
+						Font:          font12,
 					},
 					Composite{
 						Layout:        VBox{MarginsZero: true},
@@ -325,12 +352,14 @@ func CreateAndRunMainWindow() {
 										AssignTo: &filesListBox,
 										Model:    fileModel,
 										MinSize:  Size{Width: 200},
+										Font:     font12,
 									},
 									Composite{
 										Layout: VBox{MarginsZero: true},
 										Children: []Widget{
 											PushButton{
 												Text: "Удалить выбр.",
+												Font: font12,
 												OnClicked: func() {
 													idx := filesListBox.CurrentIndex()
 													if idx >= 0 {
@@ -341,6 +370,7 @@ func CreateAndRunMainWindow() {
 											},
 											PushButton{
 												Text: "Очистить все",
+												Font: font12,
 												OnClicked: func() {
 													fileModel.Clear()
 													updateFilesVisibility()
@@ -357,6 +387,7 @@ func CreateAndRunMainWindow() {
 									TextEdit{
 										AssignTo: &inputTE,
 										VScroll:  true,
+										Font:     font12,
 										OnKeyDown: func(key walk.Key) {
 											mods := walk.ModifiersDown()
 
@@ -390,6 +421,7 @@ func CreateAndRunMainWindow() {
 										Text:      "Отправить",
 										OnClicked: doSendOrStop,
 										MinSize:   Size{Width: 80},
+										Font:      font12,
 									},
 								},
 							},
