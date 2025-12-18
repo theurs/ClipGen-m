@@ -32,7 +32,7 @@ const (
 	DefaultBaseURL      = "https://api.mistral.ai"
 	DefaultTemperature  = 0.7
 	DefaultMaxTokens    = 8000
-	DefaultSystemPrompt = "Вы — ИИ-ассистент, интегрированный в инструмент командной строки Windows под названием ClipGen-m. Ваш вывод часто копируется непосредственно в буфер обмена пользователя или вставляется в редакторы кода.\n\nРУКОВОДСТВО:\n1. Будьте лаконичны и прямолинейны.\n2. При генерации кода предоставляйте только блок кода, если не требуется объяснение.\n3. Если ввод — это лог ошибки, кратко объясните причину.\n4. Не используйте разговорные фразы типа 'Вот код'."
+	DefaultSystemPrompt = "Вы — ИИ-ассистент, интегрированный в инструмент командной строки Windows под названием ClipGen-m. Ваш вывод часто копируется непосредственно в буфер обмена пользователя или вставляется в редакторы кода.\n\nРУКОВОДСТВО:\n1. Будьте лаконичны и прямолинейны.\n2. Если ввод — это лог ошибки, кратко объясните причину.\n3. Не используйте разговорные фразы типа 'Вот код'."
 )
 
 // Списки моделей по умолчанию (используются, если в конфиге пусто)
@@ -47,15 +47,15 @@ var DefaultModels = map[string][]string{
 // --- Структуры данных API ---
 
 type Config struct {
-	ApiKeys                   []string            `json:"api_keys"`
-	BaseURL                   string              `json:"base_url"`
-	SystemPrompt              string              `json:"system_prompt"`
-	Temperature               float64             `json:"temperature"`
-	MaxTokens                 int                 `json:"max_tokens"`
-	Models                    map[string][]string `json:"models"`
-	ChatHistoryMaxMessages    int                 `json:"chat_history_max_messages"`  // максимальное количество сообщений (по умолчанию 30)
-	ChatHistoryMaxChars       int                 `json:"chat_history_max_chars"`     // максимальное количество символов (по умолчанию 50000)
-	ImageCharCost             int                 `json:"image_char_cost"`           // стоимость изображения в символах (по умолчанию 2000)
+	ApiKeys                []string            `json:"api_keys"`
+	BaseURL                string              `json:"base_url"`
+	SystemPrompt           string              `json:"system_prompt"`
+	Temperature            float64             `json:"temperature"`
+	MaxTokens              int                 `json:"max_tokens"`
+	Models                 map[string][]string `json:"models"`
+	ChatHistoryMaxMessages int                 `json:"chat_history_max_messages"` // максимальное количество сообщений (по умолчанию 30)
+	ChatHistoryMaxChars    int                 `json:"chat_history_max_chars"`    // максимальное количество символов (по умолчанию 50000)
+	ImageCharCost          int                 `json:"image_char_cost"`           // стоимость изображения в символах (по умолчанию 2000)
 }
 
 type ChatMessage struct {
@@ -86,7 +86,7 @@ type ChatMessageHistory struct {
 }
 
 type ChatHistory struct {
-	ID       string              `json:"id"`
+	ID       string               `json:"id"`
 	Messages []ChatMessageHistory `json:"messages"`
 }
 
@@ -128,10 +128,10 @@ func (tc ToolCall) MarshalJSON() ([]byte, error) {
 }
 
 type ToolMessage struct {
-	Role       string    `json:"role"`
-	Content    string    `json:"content"`
-	ToolCallID string    `json:"tool_call_id"`
-	Name       string    `json:"name"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCallID string     `json:"tool_call_id"`
+	Name       string     `json:"name"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 }
 
@@ -140,9 +140,9 @@ type ChatResponse struct {
 	Choices []struct {
 		Index   int `json:"index"`
 		Message struct {
-			Role       string      `json:"role"`
-			Content    string      `json:"content"`
-			ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
+			Role      string     `json:"role"`
+			Content   string     `json:"content"`
+			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -197,17 +197,17 @@ func (i *arrayFlags) Set(value string) error {
 }
 
 var (
-	flagFiles     arrayFlags
-	flagSystem    string
-	flagJson      bool
-	flagMode      string
-	flagTemp      float64
-	flagVerbose   bool
-	flagSaveKey   string
-	flagChatID    string
-	flagClearChat string
-	flagTools     bool
-	flagNoTools   bool
+	flagFiles        arrayFlags
+	flagSystem       string
+	flagJson         bool
+	flagMode         string
+	flagTemp         float64
+	flagVerbose      bool
+	flagSaveKey      string
+	flagChatID       string
+	flagClearChat    string
+	flagTools        bool
+	flagNoTools      bool
 	flagAddTavilyKey string
 )
 
@@ -543,13 +543,13 @@ func executeTavilySearch(query string) (string, error) {
 
 		// Prepare the request payload
 		payload := map[string]interface{}{
-			"api_key":           apiKey,
-			"query":             query,
-			"search_depth":      "basic",
-			"include_images":    false,
-			"include_answer":    true,
+			"api_key":             apiKey,
+			"query":               query,
+			"search_depth":        "basic",
+			"include_images":      false,
+			"include_answer":      true,
 			"include_raw_content": false,
-			"max_results":       3, // Limiting results to avoid context overload
+			"max_results":         3, // Limiting results to avoid context overload
 		}
 
 		// Convert payload to JSON
@@ -837,7 +837,7 @@ func requestChatWithTools(apiKey, baseURL, model, systemPrompt, userText string,
 			// This preserves the original tool calls for the API
 			assistantMessage := ChatMessage{
 				Role:      "assistant",
-				Content:   choice.Message.Content, // This can be empty if only tool calls
+				Content:   choice.Message.Content,   // This can be empty if only tool calls
 				ToolCalls: choice.Message.ToolCalls, // Include the original tool calls
 			}
 			messages = append(messages, assistantMessage)
@@ -1122,7 +1122,7 @@ func requestChatWithToolsHistory(apiKey, baseURL, model, systemPrompt, userText 
 			// This preserves the original tool calls for the API
 			assistantMessage := ChatMessage{
 				Role:      "assistant",
-				Content:   choice.Message.Content, // This can be empty if only tool calls
+				Content:   choice.Message.Content,   // This can be empty if only tool calls
 				ToolCalls: choice.Message.ToolCalls, // Include the original tool calls
 			}
 			messages = append(messages, assistantMessage)
