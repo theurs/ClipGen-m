@@ -11,6 +11,7 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -58,8 +59,10 @@ type Config struct {
 }
 
 type ChatMessage struct {
-	Role    string      `json:"role"`
-	Content interface{} `json:"content"`
+	Role       string      `json:"role"`
+	Content    interface{} `json:"content"`
+	ToolCallID string      `json:"tool_call_id,omitempty"`
+	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
 }
 
 type ContentPart struct {
@@ -87,26 +90,83 @@ type ChatHistory struct {
 	Messages []ChatMessageHistory `json:"messages"`
 }
 
+type ToolFunction struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Parameters  struct {
+		Type       string                 `json:"type"`
+		Properties map[string]interface{} `json:"properties"`
+		Required   []string               `json:"required"`
+	} `json:"parameters"`
+}
+
+type Tool struct {
+	Type     string       `json:"type"`
+	Function ToolFunction `json:"function"`
+}
+
+type ToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+func (tc ToolCall) MarshalJSON() ([]byte, error) {
+	// Убедимся, что Type всегда равен "function" при маршализации
+	type Alias ToolCall
+	aux := struct {
+		*Alias
+		Type string `json:"type"`
+	}{
+		Alias: (*Alias)(&tc),
+		Type:  "function", // Принудительно устанавливаем тип в "function"
+	}
+	return json.Marshal(aux)
+}
+
+type ToolMessage struct {
+	Role       string    `json:"role"`
+	Content    string    `json:"content"`
+	ToolCallID string    `json:"tool_call_id"`
+	Name       string    `json:"name"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+}
+
+type ChatResponse struct {
+	ID      string `json:"id"`
+	Choices []struct {
+		Index   int `json:"index"`
+		Message struct {
+			Role       string      `json:"role"`
+			Content    string      `json:"content"`
+			ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
+		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
+	} `json:"choices"`
+	Usage struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
+	} `json:"usage"`
+	Error *struct {
+		Message string `json:"message"`
+		Code    string `json:"code"`
+	} `json:"error,omitempty"`
+}
+
 type ChatRequest struct {
 	Model          string        `json:"model"`
 	Messages       []ChatMessage `json:"messages"`
 	Temperature    float64       `json:"temperature"`
 	MaxTokens      int           `json:"max_tokens,omitempty"`
+	Tools          []Tool        `json:"tools,omitempty"`
+	ToolChoice     interface{}   `json:"tool_choice,omitempty"` // "auto", "required", или объект
 	ResponseFormat *struct {
 		Type string `json:"type"`
 	} `json:"response_format,omitempty"`
-}
-
-type ChatResponse struct {
-	Choices []struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
-	} `json:"choices"`
-	Error *struct {
-		Message string `json:"message"`
-		Code    string `json:"code"`
-	} `json:"error,omitempty"`
 }
 
 type OCRRequest struct {
@@ -146,6 +206,8 @@ var (
 	flagSaveKey   string
 	flagChatID    string
 	flagClearChat string
+	flagTools     bool
+	flagNoTools   bool
 )
 
 func init() {
@@ -160,6 +222,8 @@ func init() {
 	flag.StringVar(&flagSaveKey, "save-key", "", "Сохранить ключ и выйти")
 	flag.StringVar(&flagChatID, "chat", "", "ID чата для контекста (включает режим чата)")
 	flag.StringVar(&flagClearChat, "clear-chat", "", "Очистить историю указанного чата")
+	flag.BoolVar(&flagTools, "tools", false, "Включить режим вызова инструментов (устаревший, инструменты теперь включены по умолчанию)")
+	flag.BoolVar(&flagNoTools, "no-tools", false, "Отключить режим вызова инструментов")
 }
 
 // --- Main ---
@@ -372,7 +436,233 @@ func main() {
 
 // --- Логика запросов ---
 
+func createCalculatorTool() Tool {
+	return Tool{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "calculator",
+			Description: "Executes Lua scripts for mathematical calculations, algorithms, and general script execution",
+			Parameters: struct {
+				Type       string                 `json:"type"`
+				Properties map[string]interface{} `json:"properties"`
+				Required   []string               `json:"required"`
+			}{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"expression": map[string]interface{}{
+						"type":        "string",
+						"description": "Lua script to execute - can be mathematical expression, algorithm function, loop, or any valid Lua code (e.g., '2 + 3 * 4', 'math.sqrt(16)', 'math.sin(math.pi / 2)', 'function factorial(n) if n <= 1 then return 1 else return n * factorial(n-1) end; return factorial(10)', 'for i=1,10 do sum = sum or 0; sum = sum + i end; return sum')",
+					},
+				},
+				Required: []string{"expression"},
+			},
+		},
+	}
+}
+
+func executeCalculator(expression string) (string, error) {
+	// Execute the Lua script using our lua-executor utility
+	cmd := fmt.Sprintf("cd lua-executor && go run main.go \"%s\"", expression)
+	out, err := runCommand(cmd)
+	if err != nil {
+		return "", fmt.Errorf("error executing calculator: %v", err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func runCommand(cmdStr string) (string, error) {
+	// Split the command to handle "cd directory && command" pattern
+	parts := strings.Split(cmdStr, " && ")
+
+	if len(parts) == 1 {
+		// Simple command
+		cmd := exec.Command("cmd", "/c", parts[0])
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		if err != nil {
+			return "", fmt.Errorf("command failed: %v, stderr: %s", err, stderr.String())
+		}
+		return stdout.String(), nil
+	} else if len(parts) >= 2 {
+		// "cd dir && command" pattern
+		dir := strings.TrimPrefix(parts[0], "cd ")
+		dir = strings.TrimSpace(dir)
+		command := strings.Join(parts[1:], " && ")
+
+		cmd := exec.Command("cmd", "/c", command)
+		cmd.Dir = dir
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		if err != nil {
+			return "", fmt.Errorf("command failed: %v, stderr: %s", err, stderr.String())
+		}
+		return stdout.String(), nil
+	}
+
+	return "", fmt.Errorf("invalid command format")
+}
+
+func requestChatWithTools(apiKey, baseURL, model, systemPrompt, userText string, files []FileData, temp float64, maxTokens int, jsonMode bool) (string, error) {
+	// Create the initial messages
+	messages := []ChatMessage{
+		{Role: "system", Content: systemPrompt},
+	}
+
+	var content interface{}
+	if len(files) == 0 {
+		content = userText
+	} else {
+		parts := []ContentPart{}
+		if userText != "" {
+			parts = append(parts, ContentPart{Type: "text", Text: userText})
+		}
+
+		for _, f := range files {
+			if strings.HasPrefix(f.MimeType, "image/") {
+				parts = append(parts, ContentPart{
+					Type: "image_url",
+					ImageUrl: &struct {
+						Url string `json:"url"`
+					}{
+						Url: fmt.Sprintf("data:%s;base64,%s", f.MimeType, f.Base64Content),
+					},
+				})
+			} else if strings.HasPrefix(f.MimeType, "audio/") {
+				format := "mp3"
+				if strings.Contains(f.MimeType, "wav") {
+					format = "wav"
+				}
+				parts = append(parts, ContentPart{
+					Type: "input_audio",
+					InputAudio: &struct {
+						Data   string `json:"data"`
+						Format string `json:"format"`
+					}{
+						Data:   f.Base64Content,
+						Format: format,
+					},
+				})
+			} else if strings.HasPrefix(f.MimeType, "text/") || f.MimeType == "application/json" {
+				textBytes, _ := base64.StdEncoding.DecodeString(f.Base64Content)
+				parts = append(parts, ContentPart{
+					Type: "text",
+					Text: fmt.Sprintf("\n--- File: %s ---\n%s\n", f.Name, string(textBytes)),
+				})
+			}
+		}
+		content = parts
+	}
+
+	messages = append(messages, ChatMessage{Role: "user", Content: content})
+
+	// Create the calculator tool
+	calculatorTool := createCalculatorTool()
+	tools := []Tool{calculatorTool}
+
+	// Maximum number of tool call iterations to prevent infinite loops
+	maxIterations := 5
+	currentIteration := 0
+	var resp ChatResponse
+
+	// Loop to handle multiple rounds of tool calls
+	for currentIteration < maxIterations {
+		url := strings.TrimRight(baseURL, "/") + "/v1/chat/completions"
+
+		reqBody := ChatRequest{
+			Model:       model,
+			Messages:    messages,
+			Temperature: temp,
+			MaxTokens:   maxTokens,
+			Tools:       tools,
+			ToolChoice:  "auto", // Let the model decide when to use tools
+		}
+
+		if jsonMode {
+			reqBody.ResponseFormat = &struct {
+				Type string `json:"type"`
+			}{Type: "json_object"}
+		}
+
+		jsonData, _ := json.Marshal(reqBody)
+		respBytes, err := doHttp(apiKey, url, "application/json", jsonData)
+		if err != nil {
+			return "", err
+		}
+
+		resp = ChatResponse{} // Reset response
+		if err := json.Unmarshal(respBytes, &resp); err != nil {
+			return "", fmt.Errorf("json parse error: %v | Body: %s", err, string(respBytes))
+		}
+		if resp.Error != nil {
+			return "", fmt.Errorf("api error %s: %s", resp.Error.Code, resp.Error.Message)
+		}
+		if len(resp.Choices) == 0 {
+			return "", fmt.Errorf("empty choices")
+		}
+
+		choice := resp.Choices[0]
+
+		// Check if the model wants to call any tools
+		if len(choice.Message.ToolCalls) > 0 {
+			// Add the assistant message with tool calls to the conversation
+			// This preserves the original tool calls for the API
+			assistantMessage := ChatMessage{
+				Role:      "assistant",
+				Content:   choice.Message.Content, // This can be empty if only tool calls
+				ToolCalls: choice.Message.ToolCalls, // Include the original tool calls
+			}
+			messages = append(messages, assistantMessage)
+
+			// Process each tool call and add results as separate messages
+			for _, toolCall := range choice.Message.ToolCalls {
+				if toolCall.Function.Name == "calculator" {
+					var args map[string]interface{}
+					if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
+						return "", fmt.Errorf("error parsing tool arguments: %v", err)
+					}
+
+					// Convert the expression to string - args["expression"] is interface{}
+					expression, ok := args["expression"].(string)
+					if !ok {
+						return "", fmt.Errorf("expression argument is not a string")
+					}
+
+					result, err := executeCalculator(expression)
+					if err != nil {
+						return "", fmt.Errorf("error executing calculator: %v", err)
+					}
+
+					// Add the tool result to the conversation
+					toolResultMsg := ChatMessage{
+						Role:       "tool",
+						Content:    result,
+						ToolCallID: toolCall.ID,
+					}
+					messages = append(messages, toolResultMsg)
+				}
+			}
+
+			// Continue to next iteration to get model's response to tool results
+			currentIteration++
+		} else {
+			// No more tool calls, return final response
+			return choice.Message.Content, nil
+		}
+	}
+
+	// If we've reached max iterations without a complete response, return an error
+	return "", fmt.Errorf("reached maximum iterations without complete response")
+}
+
 func requestChat(apiKey, baseURL, model, systemPrompt, userText string, files []FileData, temp float64, maxTokens int, jsonMode bool) (string, error) {
+	if !flagNoTools {
+		return requestChatWithTools(apiKey, baseURL, model, systemPrompt, userText, files, temp, maxTokens, jsonMode)
+	}
+
 	url := strings.TrimRight(baseURL, "/") + "/v1/chat/completions"
 
 	messages := []ChatMessage{
@@ -507,7 +797,126 @@ func formatChatContent(userText string, files []FileData) interface{} {
 	return content
 }
 
+func requestChatWithToolsHistory(apiKey, baseURL, model, systemPrompt, userText string, files []FileData, temp float64, maxTokens int, jsonMode bool, chatHistory *ChatHistory) (string, error) {
+	// Создаем начальные сообщения с системным промптом
+	messages := []ChatMessage{
+		{Role: "system", Content: systemPrompt},
+	}
+
+	// Добавляем сообщения из истории чата
+	for _, msg := range chatHistory.Messages {
+		if msg.Role == "user" || msg.Role == "assistant" || msg.Role == "tool" {
+			messages = append(messages, ChatMessage{Role: msg.Role, Content: msg.Content})
+		}
+	}
+
+	// Добавляем текущий запрос
+	currentContent := formatChatContent(userText, files)
+	messages = append(messages, ChatMessage{Role: "user", Content: currentContent})
+
+	// Create the calculator tool
+	calculatorTool := createCalculatorTool()
+	tools := []Tool{calculatorTool}
+
+	// Maximum number of tool call iterations to prevent infinite loops
+	maxIterations := 5
+	currentIteration := 0
+
+	// Loop to handle multiple rounds of tool calls
+	for currentIteration < maxIterations {
+		url := strings.TrimRight(baseURL, "/") + "/v1/chat/completions"
+
+		reqBody := ChatRequest{
+			Model:       model,
+			Messages:    messages,
+			Temperature: temp,
+			MaxTokens:   maxTokens,
+			Tools:       tools,
+			ToolChoice:  "auto", // Let the model decide when to use tools
+		}
+
+		if jsonMode {
+			reqBody.ResponseFormat = &struct {
+				Type string `json:"type"`
+			}{Type: "json_object"}
+		}
+
+		jsonData, _ := json.Marshal(reqBody)
+		respBytes, err := doHttp(apiKey, url, "application/json", jsonData)
+		if err != nil {
+			return "", err
+		}
+
+		var resp ChatResponse
+		if err := json.Unmarshal(respBytes, &resp); err != nil {
+			return "", fmt.Errorf("json parse error: %v | Body: %s", err, string(respBytes))
+		}
+		if resp.Error != nil {
+			return "", fmt.Errorf("api error %s: %s", resp.Error.Code, resp.Error.Message)
+		}
+		if len(resp.Choices) == 0 {
+			return "", fmt.Errorf("empty choices")
+		}
+
+		choice := resp.Choices[0]
+
+		// Check if the model wants to call any tools
+		if len(choice.Message.ToolCalls) > 0 {
+			// Add the assistant message with tool calls to the conversation
+			// This preserves the original tool calls for the API
+			assistantMessage := ChatMessage{
+				Role:      "assistant",
+				Content:   choice.Message.Content, // This can be empty if only tool calls
+				ToolCalls: choice.Message.ToolCalls, // Include the original tool calls
+			}
+			messages = append(messages, assistantMessage)
+
+			// Process each tool call and add results as separate messages
+			for _, toolCall := range choice.Message.ToolCalls {
+				if toolCall.Function.Name == "calculator" {
+					var args map[string]interface{}
+					if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
+						return "", fmt.Errorf("error parsing tool arguments: %v", err)
+					}
+
+					// Convert the expression to string - args["expression"] is interface{}
+					expression, ok := args["expression"].(string)
+					if !ok {
+						return "", fmt.Errorf("expression argument is not a string")
+					}
+
+					result, err := executeCalculator(expression)
+					if err != nil {
+						return "", fmt.Errorf("error executing calculator: %v", err)
+					}
+
+					// Add the tool result to the conversation
+					toolResultMsg := ChatMessage{
+						Role:       "tool",
+						Content:    result,
+						ToolCallID: toolCall.ID,
+					}
+					messages = append(messages, toolResultMsg)
+				}
+			}
+
+			// Continue to next iteration to get model's response to tool results
+			currentIteration++
+		} else {
+			// No more tool calls, return final response
+			return choice.Message.Content, nil
+		}
+	}
+
+	// If we've reached max iterations without a complete response, return an error
+	return "", fmt.Errorf("reached maximum iterations without complete response")
+}
+
 func requestChatWithHistory(apiKey, baseURL, model, systemPrompt, userText string, files []FileData, temp float64, maxTokens int, jsonMode bool, chatHistory *ChatHistory) (string, error) {
+	if !flagNoTools {
+		return requestChatWithToolsHistory(apiKey, baseURL, model, systemPrompt, userText, files, temp, maxTokens, jsonMode, chatHistory)
+	}
+
 	url := strings.TrimRight(baseURL, "/") + "/v1/chat/completions"
 
 	// Создаем начальные сообщения с системным промптом
