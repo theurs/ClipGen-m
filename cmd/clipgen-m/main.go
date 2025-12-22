@@ -163,18 +163,24 @@ func onReady() {
 	enableHotkeys()
 }
 
-func onExit() {
+func killChatUI() {
 	chatUIMutex.Lock()
+	defer chatUIMutex.Unlock()
+
 	if chatUIProcess != nil {
-		log.Println("Завершение процесса Chat UI при выходе (KILL)...")
-		// Жесткое убийство при выходе из программы
+		log.Println("Принудительное завершение процесса Chat UI...")
 		err := chatUIProcess.Kill()
 		if err != nil {
-			log.Printf("Ошибка при убийстве процесса: %v", err)
+			log.Printf("Ошибка при убийстве Chat UI: %v", err)
 		}
+		// Обнуляем переменную сразу, чтобы не пытаться убить дважды
 		chatUIProcess = nil
 	}
-	chatUIMutex.Unlock()
+}
+
+func onExit() {
+	// Гарантированно убиваем чат перед выходом
+	killChatUI()
 
 	disableHotkeys()
 	log.Println("Завершение работы.")
@@ -227,11 +233,21 @@ func openLogFile() {
 }
 
 func openConfigFile() {
+	openFileInConfigDir("config.yaml")
+}
+
+func openFileInConfigDir(filename string) {
 	configDir, _ := os.UserConfigDir()
-	configPath := filepath.Join(configDir, "clipgen-m", "config.yaml")
-	cmd := exec.Command(config.EditorPath, configPath)
+	filePath := filepath.Join(configDir, "clipgen-m", filename)
+
+	// Если файла нет — создаем пустой, чтобы редактор не ругался (опционально)
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		os.WriteFile(filePath, []byte(""), 0644)
+	}
+
+	cmd := exec.Command(config.EditorPath, filePath)
 	if err := cmd.Start(); err != nil {
-		exec.Command("notepad.exe", configPath).Start()
+		exec.Command("notepad.exe", filePath).Start()
 	}
 }
 
@@ -692,10 +708,18 @@ func setupTray() {
 	systray.SetTitle("ClipGen-m")
 
 	mToggle := systray.AddMenuItemCheckbox("Активен", "Включить/Выключить обработку клавиш", true)
-	mConfig := systray.AddMenuItem("Настройки", "Редактировать конфиг")
-	mLog := systray.AddMenuItem("Открыть лог", "Посмотреть ошибки")
-	mReload := systray.AddMenuItem("Перезагрузка", "Применить конфиг")
+
 	systray.AddSeparator()
+	mConfig := systray.AddMenuItem("Настройки (main)", "Редактировать config.yaml")
+	mMistralConf := systray.AddMenuItem("Mistral Config", "Редактировать mistral.conf")
+	mTavilyConf := systray.AddMenuItem("Tavily Config", "Редактировать tavily.conf")
+
+	systray.AddSeparator()
+	mMistralLog := systray.AddMenuItem("Mistral Log", "Просмотр mistral_err.log")
+	mLog := systray.AddMenuItem("ClipGen Log", "Посмотреть ошибки программы")
+
+	systray.AddSeparator()
+	mReload := systray.AddMenuItem("Перезагрузка", "Применить конфиг")
 	mQuit := systray.AddMenuItem("Выход", "Закрыть приложение")
 
 	toggleHotkeyCh, err := setupToggleHotkey()
@@ -706,6 +730,7 @@ func setupTray() {
 	go func() {
 		for {
 			select {
+			// Обработка клика по галочке "Активен"
 			case <-mToggle.ClickedCh:
 				if mToggle.Checked() {
 					mToggle.Uncheck()
@@ -716,6 +741,7 @@ func setupTray() {
 					log.Println("Приложение активировано пользователем (Menu).")
 					enableHotkeys()
 				}
+			// Обработка хоткея включения/выключения
 			case <-toggleHotkeyCh:
 				if mToggle.Checked() {
 					mToggle.Uncheck()
@@ -726,10 +752,22 @@ func setupTray() {
 					log.Println("Приложение активировано пользователем (Hotkey).")
 					enableHotkeys()
 				}
-			case <-mLog.ClickedCh:
-				openLogFile()
+
+			// Конфиги
 			case <-mConfig.ClickedCh:
 				openConfigFile()
+			case <-mMistralConf.ClickedCh:
+				openFileInConfigDir("mistral.conf")
+			case <-mTavilyConf.ClickedCh:
+				openFileInConfigDir("tavily.conf")
+
+			// Логи
+			case <-mMistralLog.ClickedCh:
+				openFileInConfigDir("mistral_err.log")
+			case <-mLog.ClickedCh:
+				openLogFile()
+
+			// Системные
 			case <-mReload.ClickedCh:
 				log.Println("Запрос перезагрузки...")
 				restartApp()
@@ -878,9 +916,19 @@ func toggleChatUI() {
 }
 
 func restartApp() {
+	log.Println("Подготовка к перезагрузке...")
+
+	// Сначала убиваем чат, чтобы он не остался висеть "сиротой"
+	// и не конфликтовал с новой копией программы
+	killChatUI()
+
 	executable, _ := os.Executable()
 	cmd := exec.Command(executable)
-	cmd.Start()
+	if err := cmd.Start(); err != nil {
+		log.Printf("Ошибка перезапуска: %v", err)
+		return
+	}
+
 	systray.Quit()
 }
 
