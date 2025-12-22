@@ -52,7 +52,7 @@ func Load() *Config {
 		SendCtrlEnter: false,
 		Sessions:      make(map[string]ChatSettings),
 		DefaultSettings: ChatSettings{
-			SystemPrompt: "Ты полезный и точный ассистент.",
+			SystemPrompt: "Ты полезный и точный ассистент. Не используй markdown разметку в своих ответах. Отвечай простым текстом без символов форматирования, звездочек, решеток и других элементов markdown. Для математических выражений используй Unicode символы вместо LaTeX формул. Формулы записывай обычным текстом с использованием математических символов Unicode.",
 			Temperature:  0.7,
 			ModelMode:    "auto",
 		},

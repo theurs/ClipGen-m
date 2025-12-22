@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"image"
 	"image/png"
-	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -178,6 +177,20 @@ func onExit() {
 // LOGGING
 // ==========================================================
 
+// syncWriter wraps an io.Writer and adds sync functionality
+type syncWriter struct {
+	file *os.File
+}
+
+func (sw *syncWriter) Write(p []byte) (n int, err error) {
+	n, err = sw.file.Write(p)
+	if err == nil {
+		// Attempt to sync the file to ensure data is written to disk
+		sw.file.Sync() // This forces OS buffer to be written to disk
+	}
+	return n, err
+}
+
 func setupLogging() {
 	configDir, _ := os.UserConfigDir()
 	appDir := filepath.Join(configDir, "clipgen-m")
@@ -188,8 +201,13 @@ func setupLogging() {
 	if err != nil {
 		logFile, _ = os.OpenFile("clipgen.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	}
-	mw := io.MultiWriter(os.Stdout, logFile)
-	log.SetOutput(mw)
+
+	// Use syncWriter to ensure logs are flushed to disk immediately
+	syncFile := &syncWriter{file: logFile}
+	log.SetOutput(syncFile)
+
+	// Ensure the initial log message is written immediately
+	log.SetFlags(log.LstdFlags | log.Lshortfile) // Add more detailed logging
 }
 
 func openLogFile() {
@@ -761,22 +779,26 @@ func setupChatUIHotkey() {
 	if config.ChatUIHotkey == "" {
 		return
 	}
+	log.Printf("Attempting to register chat hotkey: %s", config.ChatUIHotkey)
 	mods, key, err := parseHotkey(config.ChatUIHotkey)
 	if err != nil {
-		log.Printf("WARNING: ошибка парсинга ChatUIHotkey: %v", err)
+		log.Printf("WARNING: error parsing ChatUIHotkey: %v", err)
 		return
 	}
+	log.Printf("Parsing successful. Modifiers: %d, Key: %d", mods, key)
 	hk := hotkey.New([]hotkey.Modifier{hotkey.Modifier(mods)}, key)
 	if err := hk.Register(); err != nil {
-		log.Printf("WARNING: не удалось зарегистрировать ChatUIHotkey: %v", err)
+		log.Printf("WARNING: failed to register ChatUIHotkey: %v", err)
+		log.Printf("POSSIBLY THIS HOTKEY IS USED BY ANOTHER APPLICATION: %s", config.ChatUIHotkey)
 		return
 	}
 	go func() {
 		for range hk.Keydown() {
+			log.Printf("Chat hotkey triggered: %s", config.ChatUIHotkey)
 			toggleChatUI()
 		}
 	}()
-	log.Printf("Зарегистрирован хоткей для чата: %s", config.ChatUIHotkey)
+	log.Printf("SUCCESSFULLY registered chat hotkey: %s", config.ChatUIHotkey)
 }
 
 func toggleChatUI() {
@@ -798,8 +820,20 @@ func toggleChatUI() {
 
 	// Сценарий 2: Процесс не запущен, запускаем
 	log.Println("[Действие] Процесс не существует. Запускаем новый...")
-	// Используем путь из конфига!
-	cmd := exec.Command(config.ChatUIPath)
+
+	// Попробуем найти исполняемый файл в PATH, если он не найден по указанному пути
+	executablePath := config.ChatUIPath
+	if !filepath.IsAbs(config.ChatUIPath) {
+		// Если путь не абсолютный, попробуем найти в PATH
+		if resolvedPath, err := exec.LookPath(config.ChatUIPath); err == nil {
+			executablePath = resolvedPath
+			log.Printf(" -> Найден исполняемый файл в PATH: %s", executablePath)
+		} else {
+			log.Printf(" -> Исполняемый файл не найден в PATH: %s", config.ChatUIPath)
+		}
+	}
+
+	cmd := exec.Command(executablePath)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		CreationFlags: 0x08000000, // CREATE_NO_WINDOW (если это консольное приложение)
 	}
@@ -854,7 +888,7 @@ func loadOrCreateConfig() error {
 editor_path: "notepad.exe"
 llm_path: "mistral.exe"
 app_toggle_hotkey: "Ctrl+F12"
-chatui_path: "ClipGen-m-chatui.exe"
+chatui_path: ".\\ClipGen-m-chatui.exe"
 chatui_hotkey: "Ctrl+M"
 system_prompt: |
   Вы работаете в Windows-утилите ClipGen-m, которая помогает отправлять запросы к ИИ-моделям через буфер обмена.
@@ -947,25 +981,30 @@ func enableHotkeys() {
 	hotkeyMutex.Lock()
 	defer hotkeyMutex.Unlock()
 	systray.SetIcon(iconNormal)
-	systray.SetTooltip("ClipGen-m: Активен")
-	log.Println("Регистрация горячих клавиш...")
+	systray.SetTooltip("ClipGen-m: Active")
+	log.Println("Registering hotkeys...")
 	for _, action := range config.Actions {
+		log.Printf("Attempting to register hotkey '%s' for action '%s'", action.Hotkey, action.Name)
 		mods, key, err := parseHotkey(action.Hotkey)
 		if err != nil {
-			log.Printf("Ошибка хоткея '%s': %v", action.Hotkey, err)
+			log.Printf("Error parsing hotkey '%s': %v", action.Hotkey, err)
 			continue
 		}
+		log.Printf("Parsing successful. Modifiers: %d, Key: %d for action '%s'", mods, key, action.Name)
 		hk := hotkey.New([]hotkey.Modifier{hotkey.Modifier(mods)}, key)
 		if err := hk.Register(); err != nil {
-			log.Printf("Не удалось зарегистрировать '%s': %v", action.Hotkey, err)
+			log.Printf("Failed to register '%s' for action '%s': %v", action.Hotkey, action.Name, err)
+			log.Printf("POSSIBLY THIS HOTKEY IS USED BY ANOTHER APPLICATION: %s", action.Hotkey)
 			continue
 		}
+		log.Printf("SUCCESSFULLY registered hotkey '%s' for action '%s'", action.Hotkey, action.Name)
 		control := HotkeyControl{hk: hk, quit: make(chan struct{})}
 		activeHotkeys = append(activeHotkeys, control)
 		go func(a Action, c HotkeyControl) {
 			for {
 				select {
 				case <-c.hk.Keydown():
+					log.Printf("Hotkey '%s' for action '%s' triggered", a.Hotkey, a.Name)
 					actionChan <- a
 				case <-c.quit:
 					return
@@ -978,6 +1017,7 @@ func enableHotkeys() {
 // ИЗМЕНЕНИЕ: Функция теперь возвращает uint32 для модификаторов и использует флаг MOD_NOREPEAT
 // ИЗМЕНЕНИЕ: Исправлена ошибка типов при смешивании uint32 и hotkey.Modifier
 func parseHotkey(hotkeyStr string) (uint32, hotkey.Key, error) {
+	log.Printf("Parsing hotkey: %s", hotkeyStr)
 	parts := strings.Split(hotkeyStr, "+")
 	var mods uint32
 	var key hotkey.Key
@@ -993,30 +1033,40 @@ func parseHotkey(hotkeyStr string) (uint32, hotkey.Key, error) {
 	}
 	for i, part := range parts {
 		part = strings.TrimSpace(strings.ToUpper(part))
+		log.Printf("Processing hotkey part: %s (index: %d)", part, i)
 		if i == len(parts)-1 {
 			if k, ok := keyMap[part]; ok {
 				key = k
+				log.Printf("Found key: %s -> %d", part, key)
 			} else {
-				return 0, 0, fmt.Errorf("неизвестная клавиша: %s", part)
+				log.Printf("Unknown key: %s", part)
+				return 0, 0, fmt.Errorf("unknown key: %s", part)
 			}
 		} else {
 			switch part {
 			// ИСПРАВЛЕНИЕ: Добавлено явное приведение типа к uint32
 			case "CTRL":
 				mods |= uint32(hotkey.ModCtrl)
+				log.Printf("Added CTRL modifier: %d", mods)
 			case "SHIFT":
 				mods |= uint32(hotkey.ModShift)
+				log.Printf("Added SHIFT modifier: %d", mods)
 			case "ALT":
 				mods |= uint32(hotkey.ModAlt)
+				log.Printf("Added ALT modifier: %d", mods)
 			case "WIN":
 				mods |= uint32(hotkey.ModWin)
+				log.Printf("Added WIN modifier: %d", mods)
 			default:
-				return 0, 0, fmt.Errorf("неизвестный модификатор: %s", part)
+				log.Printf("Unknown modifier: %s", part)
+				return 0, 0, fmt.Errorf("unknown modifier: %s", part)
 			}
 		}
 	}
 	if key == 0 {
-		return 0, 0, fmt.Errorf("клавиша не указана в хоткее")
+		log.Printf("Key not specified in hotkey: %s", hotkeyStr)
+		return 0, 0, fmt.Errorf("key not specified in hotkey")
 	}
+	log.Printf("Parsing completed successfully: modifiers=%d, key=%d", mods|MOD_NOREPEAT, key)
 	return mods | MOD_NOREPEAT, key, nil
 }

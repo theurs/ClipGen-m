@@ -6,8 +6,10 @@ import (
 	"clipgen-m-chatui/internal/config"
 	"clipgen-m-chatui/internal/mistral"
 	"context"
+	_ "embed" // ВАЖНО: Подключаем пакет для встраивания файлов
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -15,6 +17,12 @@ import (
 	"github.com/lxn/walk"
 	. "github.com/lxn/walk/declarative"
 )
+
+// ВАЖНО: Встраиваем иконку прямо в бинарник через Go.
+// Файл chatui.ico должен лежать рядом с этим файлом (в папке internal/ui/)
+//
+//go:embed chatui.ico
+var iconData []byte
 
 var (
 	app *walk.Application
@@ -52,6 +60,35 @@ func (m *FileListModel) Remove(index int) {
 func (m *FileListModel) Clear() {
 	m.items = []string{}
 	m.PublishItemsReset()
+}
+
+// loadAppIcon сохраняет встроенную иконку во временный файл и загружает её.
+// Это самый надежный способ заставить иконку работать в walk.
+func loadAppIcon() (*walk.Icon, error) {
+	// 1. Сначала пробуем МГНОВЕННЫЙ способ (из ресурсов EXE, которые вшил rsrc)
+	// Это не требует записи на диск.
+	if icon, err := walk.NewIconFromResourceId(1); err == nil {
+		return icon, nil
+	}
+
+	// 2. Если быстрый способ не сработал (например, walk капризничает),
+	// используем медленный, но надежный (через временный файл)
+	if len(iconData) == 0 {
+		return nil, fmt.Errorf("icon data is empty")
+	}
+	tmpFile, err := os.CreateTemp("", "chatui_icon_*.ico")
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(tmpFile.Name())
+	defer tmpFile.Close()
+
+	if _, err := tmpFile.Write(iconData); err != nil {
+		return nil, err
+	}
+	tmpFile.Close()
+
+	return walk.NewIconFromFile(tmpFile.Name())
 }
 
 func CreateAndRunMainWindow() {
@@ -105,7 +142,7 @@ func CreateAndRunMainWindow() {
 
 		// Use Synchronize to ensure scroll happens after UI updates
 		mainWindow.Synchronize(func() {
-			historyTE.SendMessage(277, 7, 0)  // WM_VSCROLL with SB_BOTTOM
+			historyTE.SendMessage(277, 7, 0) // WM_VSCROLL with SB_BOTTOM
 		})
 	}
 
@@ -129,7 +166,7 @@ func CreateAndRunMainWindow() {
 
 		// Use Synchronize to ensure scroll happens after UI updates
 		mainWindow.Synchronize(func() {
-			historyTE.SendMessage(277, 7, 0)  // WM_VSCROLL with SB_BOTTOM
+			historyTE.SendMessage(277, 7, 0) // WM_VSCROLL with SB_BOTTOM
 		})
 	}
 
@@ -175,28 +212,37 @@ func CreateAndRunMainWindow() {
 
 	// Обработка Ctrl+V
 	handlePaste := func() {
-		if HasClipboardFiles() {
-			files, err := GetClipboardFiles()
-			if err == nil && len(files) > 0 {
-				fileModel.Add(files)
-				updateFilesVisibility()
-				return
-			}
-		}
-
-		if HasClipboardImage() {
-			path, err := SaveClipboardImageToTemp()
-			if err == nil && path != "" {
-				fileModel.Add([]string{path})
-				updateFilesVisibility()
-			} else if err != nil {
-				walk.MsgBox(mainWindow, "Ошибка", "Не удалось вставить изображение: "+err.Error(), walk.MsgBoxIconError)
-			}
-			return
-		}
-
-		// Если это просто текст, используем системное сообщение WM_PASTE
+		// Сначала сразу вставляем текст (для быстрого отклика)
 		inputTE.SendMessage(0x0302, 0, 0)
+
+		// Затем асинхронно проверяем наличие файлов/изображений в буфере
+		go func() {
+			// Небольшая задержка чтобы избежать конфликта с вставкой текста
+			time.Sleep(50 * time.Millisecond)
+
+			// Выполняем проверки в главной горутине для доступа к UI
+			mainWindow.Synchronize(func() {
+				if HasClipboardFiles() {
+					files, err := GetClipboardFiles()
+					if err == nil && len(files) > 0 {
+						fileModel.Add(files)
+						updateFilesVisibility()
+						return
+					}
+				}
+
+				if HasClipboardImage() {
+					path, err := SaveClipboardImageToTemp()
+					if err == nil && path != "" {
+						fileModel.Add([]string{path})
+						updateFilesVisibility()
+					} else if err != nil {
+						walk.MsgBox(mainWindow, "Ошибка", "Не удалось вставить изображение: "+err.Error(), walk.MsgBoxIconError)
+					}
+					return
+				}
+			})
+		}()
 	}
 
 	doSendOrStop := func() {
@@ -434,6 +480,17 @@ func CreateAndRunMainWindow() {
 
 	if err != nil {
 		log.Fatalf("Ошибка создания MainWindow: %v", err)
+	}
+
+	// ==========================================================
+	// ИСПРАВЛЕНИЕ: Загружаем иконку из встроенных данных (embed),
+	// сохраняя во временный файл. Это обходит ошибку Windows API.
+	// ==========================================================
+	if icon, err := loadAppIcon(); err == nil {
+		mainWindow.SetIcon(icon)
+	} else {
+		// Если не вышло — просто пишем в лог, но не пугаем пользователя окном ошибки
+		log.Printf("Warning: Failed to load app icon: %v", err)
 	}
 
 	// Attach event handler to save window position and size immediately when changed
