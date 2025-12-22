@@ -6,7 +6,7 @@ import (
 	"clipgen-m-chatui/internal/config"
 	"clipgen-m-chatui/internal/mistral"
 	"context"
-	_ "embed" // ВАЖНО: Подключаем пакет для встраивания файлов
+	_ "embed"
 	"fmt"
 	"log"
 	"os"
@@ -18,9 +18,6 @@ import (
 	. "github.com/lxn/walk/declarative"
 )
 
-// ВАЖНО: Встраиваем иконку прямо в бинарник через Go.
-// Файл chatui.ico должен лежать рядом с этим файлом (в папке internal/ui/)
-//
 //go:embed chatui.ico
 var iconData []byte
 
@@ -62,17 +59,14 @@ func (m *FileListModel) Clear() {
 	m.PublishItemsReset()
 }
 
-// loadAppIcon сохраняет встроенную иконку во временный файл и загружает её.
-// Это самый надежный способ заставить иконку работать в walk.
+// loadAppIcon теперь выполняется асинхронно в логике запуска
 func loadAppIcon() (*walk.Icon, error) {
-	// 1. Сначала пробуем МГНОВЕННЫЙ способ (из ресурсов EXE, которые вшил rsrc)
-	// Это не требует записи на диск.
+	// 1. Пробуем из ресурсов (быстро)
 	if icon, err := walk.NewIconFromResourceId(1); err == nil {
 		return icon, nil
 	}
 
-	// 2. Если быстрый способ не сработал (например, walk капризничает),
-	// используем медленный, но надежный (через временный файл)
+	// 2. Fallback через временный файл (может быть медленно из-за антивируса)
 	if len(iconData) == 0 {
 		return nil, fmt.Errorf("icon data is empty")
 	}
@@ -107,16 +101,10 @@ func CreateAndRunMainWindow() {
 	fileModel := &FileListModel{items: []string{}}
 
 	var cancelGen context.CancelFunc
-
-	// To prevent too frequent saving when window is being moved/resized rapidly
 	var lastSaveTime time.Time
-
-	// Variable to store all chat history for proper line break handling
 	var fullChatHistory string
 
-	// Helper function to save config immediately to avoid losing changes if app crashes
 	saveConfigImmediately := func() {
-		// Prevent saving more than once per 100ms to avoid excessive disk writes during window movement
 		now := time.Now()
 		if now.Sub(lastSaveTime) < 100*time.Millisecond {
 			return
@@ -135,14 +123,12 @@ func CreateAndRunMainWindow() {
 		currentTime := time.Now().Format("02.01.2006 15:04")
 		newEntry := fmt.Sprintf("%s [%s]:\r\n%s\r\n\r\n", author, currentTime, text)
 		fullChatHistory += newEntry
-		// Ensure proper line endings for Windows
 		displayText := strings.ReplaceAll(fullChatHistory, "\n", "\r\n")
-		displayText = strings.ReplaceAll(displayText, "\r\r\n", "\r\n") // avoid double CR
+		displayText = strings.ReplaceAll(displayText, "\r\r\n", "\r\n")
 		historyTE.SetText(displayText)
 
-		// Use Synchronize to ensure scroll happens after UI updates
 		mainWindow.Synchronize(func() {
-			historyTE.SendMessage(277, 7, 0) // WM_VSCROLL with SB_BOTTOM
+			historyTE.SendMessage(277, 7, 0) // WM_VSCROLL -> SB_BOTTOM
 		})
 	}
 
@@ -159,14 +145,12 @@ func CreateAndRunMainWindow() {
 			return
 		}
 		text := chat.LoadHistory(chatID)
-		// Ensure proper line endings for Windows
 		fullChatHistory = strings.ReplaceAll(text, "\n", "\r\n")
-		fullChatHistory = strings.ReplaceAll(fullChatHistory, "\r\r\n", "\r\n") // avoid double CR
+		fullChatHistory = strings.ReplaceAll(fullChatHistory, "\r\r\n", "\r\n")
 		historyTE.SetText(fullChatHistory)
 
-		// Use Synchronize to ensure scroll happens after UI updates
 		mainWindow.Synchronize(func() {
-			historyTE.SendMessage(277, 7, 0) // WM_VSCROLL with SB_BOTTOM
+			historyTE.SendMessage(277, 7, 0)
 		})
 	}
 
@@ -210,17 +194,10 @@ func CreateAndRunMainWindow() {
 		}
 	}
 
-	// Обработка Ctrl+V
 	handlePaste := func() {
-		// Сначала сразу вставляем текст (для быстрого отклика)
 		inputTE.SendMessage(0x0302, 0, 0)
-
-		// Затем асинхронно проверяем наличие файлов/изображений в буфере
 		go func() {
-			// Небольшая задержка чтобы избежать конфликта с вставкой текста
 			time.Sleep(50 * time.Millisecond)
-
-			// Выполняем проверки в главной горутине для доступа к UI
 			mainWindow.Synchronize(func() {
 				if HasClipboardFiles() {
 					files, err := GetClipboardFiles()
@@ -230,7 +207,6 @@ func CreateAndRunMainWindow() {
 						return
 					}
 				}
-
 				if HasClipboardImage() {
 					path, err := SaveClipboardImageToTemp()
 					if err == nil && path != "" {
@@ -246,14 +222,12 @@ func CreateAndRunMainWindow() {
 	}
 
 	doSendOrStop := func() {
-		// STOP
 		if cancelGen != nil {
 			cancelGen()
 			cancelGen = nil
 			return
 		}
 
-		// SEND
 		prompt := inputTE.Text()
 		attachedFiles := fileModel.items
 
@@ -331,7 +305,6 @@ func CreateAndRunMainWindow() {
 		}
 	}
 
-	// Define larger font with 12pt size
 	font12 := Font{Family: "Microsoft Sans Serif", PointSize: 12}
 
 	// --- UI ---
@@ -483,37 +456,40 @@ func CreateAndRunMainWindow() {
 	}
 
 	// ==========================================================
-	// ИСПРАВЛЕНИЕ: Загружаем иконку из встроенных данных (embed),
-	// сохраняя во временный файл. Это обходит ошибку Windows API.
+	// ОПТИМИЗАЦИЯ ЗАПУСКА
+	// Переносим загрузку иконки и истории в фон, чтобы окно
+	// отрисовалось мгновенно.
 	// ==========================================================
-	if icon, err := loadAppIcon(); err == nil {
-		mainWindow.SetIcon(icon)
-	} else {
-		// Если не вышло — просто пишем в лог, но не пугаем пользователя окном ошибки
-		log.Printf("Warning: Failed to load app icon: %v", err)
-	}
+	go func() {
+		// 1. Иконка (может вызывать I/O)
+		if icon, err := loadAppIcon(); err == nil {
+			mainWindow.Synchronize(func() {
+				mainWindow.SetIcon(icon)
+			})
+		} else {
+			log.Printf("Warning: Failed to load app icon: %v", err)
+		}
 
-	// Attach event handler to save window position and size immediately when changed
-	// BoundsChanged fires when either position or size of the window changes
+		// 2. Начальная история чата
+		mainWindow.Synchronize(func() {
+			if len(availableChats) > 0 {
+				_ = chatCombo.SetCurrentIndex(0)
+				loadSelectedChat()
+			} else {
+				chatCombo.SetText("default")
+			}
+			// Фокус ставим только когда всё готово
+			inputTE.SetFocus()
+		})
+	}()
+
 	mainWindow.BoundsChanged().Attach(func() {
 		saveConfigImmediately()
 	})
 
-	if len(availableChats) > 0 {
-		_ = chatCombo.SetCurrentIndex(0)
-		loadSelectedChat()
-	} else {
-		chatCombo.SetText("default")
-	}
-
 	mainWindow.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
-		// Configuration is already saved immediately when changed,
-		// but we save once more on close to ensure everything is up to date
 		saveConfigImmediately()
 	})
-
-	// Устанавливаем фокус на поле ввода перед запуском
-	inputTE.SetFocus()
 
 	mainWindow.Run()
 }
