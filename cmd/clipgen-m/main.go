@@ -52,6 +52,10 @@ var (
 	enumWindows              = user32.NewProc("EnumWindows")
 	getWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
 	sendMessageTimeoutW      = user32.NewProc("SendMessageTimeoutW")
+
+	// Новые функции для управления видимостью
+	showWindow      = user32.NewProc("ShowWindow")
+	isWindowVisible = user32.NewProc("IsWindowVisible")
 )
 
 const (
@@ -59,8 +63,11 @@ const (
 	CF_DIB           = 8
 	WM_CLOSE         = 0x0010
 	SMTO_ABORTIFHUNG = 0x0002
-	// НОВЫЙ ФЛАГ: Для надежной регистрации глобальных хоткеев.
-	MOD_NOREPEAT = 0x4000
+	MOD_NOREPEAT     = 0x4000
+
+	// Константы для ShowWindow
+	SW_HIDE    = 0
+	SW_RESTORE = 9
 )
 
 type BITMAPFILEHEADER struct {
@@ -805,38 +812,50 @@ func toggleChatUI() {
 	chatUIMutex.Lock()
 	defer chatUIMutex.Unlock()
 
-	// Сценарий 1: Процесс запущен, нужно его жестко убить
-	if chatUIProcess != nil {
-		log.Printf("[Действие] Убиваем процесс ChatUI (PID: %d)", chatUIProcess.Pid)
-		// Убиваем процесс
-		if err := chatUIProcess.Kill(); err != nil {
-			log.Printf(" -> Ошибка Kill: %v", err)
+	// 1. Поиск окна по заголовку
+	windowTitle := "ClipGen-m ChatUI" // Должен совпадать с Title в MainWindow chatui
+	titlePtr, _ := syscall.UTF16PtrFromString(windowTitle)
+	hwnd, _, _ := findWindow.Call(0, uintptr(unsafe.Pointer(titlePtr)))
+
+	// 2. Если окно найдено — переключаем видимость
+	if hwnd != 0 {
+		ret, _, _ := isWindowVisible.Call(hwnd)
+		isVisible := ret != 0
+
+		if isVisible {
+			// Скрываем
+			log.Println("[ChatUI] Окно найдено, скрываем.")
+			showWindow.Call(hwnd, SW_HIDE)
+		} else {
+			// Показываем
+			log.Println("[ChatUI] Окно найдено (скрыто), показываем.")
+			showWindow.Call(hwnd, SW_RESTORE)
+			setForegroundWindow.Call(hwnd)
 		}
-		// Сразу обнуляем переменную, не дожидаясь наблюдателя,
-		// чтобы интерфейс был отзывчивым
-		chatUIProcess = nil
 		return
 	}
 
-	// Сценарий 2: Процесс не запущен, запускаем
-	log.Println("[Действие] Процесс не существует. Запускаем новый...")
+	// 3. Если окно не найдено, проверяем состояние процесса
+	if chatUIProcess != nil {
+		// Если процесс жив, но окно не найдено, возможно оно еще создается
+		if err := chatUIProcess.Signal(syscall.Signal(0)); err == nil {
+			log.Println("[ChatUI] Процесс запущен, но окно еще не найдено (инициализация?)")
+			return
+		}
+		// Процесс мертв
+		chatUIProcess = nil
+	}
 
-	// Попробуем найти исполняемый файл в PATH, если он не найден по указанному пути
+	log.Println("[ChatUI] Окно не найдено. Запускаем процесс...")
+
 	executablePath := config.ChatUIPath
 	if !filepath.IsAbs(config.ChatUIPath) {
-		// Если путь не абсолютный, попробуем найти в PATH
 		if resolvedPath, err := exec.LookPath(config.ChatUIPath); err == nil {
 			executablePath = resolvedPath
-			log.Printf(" -> Найден исполняемый файл в PATH: %s", executablePath)
-		} else {
-			log.Printf(" -> Исполняемый файл не найден в PATH: %s", config.ChatUIPath)
 		}
 	}
 
 	cmd := exec.Command(executablePath)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: 0x08000000, // CREATE_NO_WINDOW (если это консольное приложение)
-	}
 
 	if err := cmd.Start(); err != nil {
 		log.Printf(" -> Ошибка запуска: %v", err)
@@ -846,13 +865,12 @@ func toggleChatUI() {
 	chatUIProcess = cmd.Process
 	log.Printf(" -> Процесс успешно запущен (PID: %d)", chatUIProcess.Pid)
 
-	// Горутина-наблюдатель для очистки (на случай, если пользователь закроет окно руками)
+	// Наблюдатель
 	go func(p *os.Process) {
 		p.Wait()
 		chatUIMutex.Lock()
-		// Проверяем, что это тот самый процесс, а не новый, запущенный после перезапуска
 		if chatUIProcess != nil && chatUIProcess.Pid == p.Pid {
-			log.Println("[Наблюдатель] Процесс завершился, очищаем переменную.")
+			log.Println("[Наблюдатель] Процесс ChatUI завершился.")
 			chatUIProcess = nil
 		}
 		chatUIMutex.Unlock()
