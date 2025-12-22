@@ -855,27 +855,37 @@ func toggleChatUI() {
 	titlePtr, _ := syscall.UTF16PtrFromString(windowTitle)
 	hwnd, _, _ := findWindow.Call(0, uintptr(unsafe.Pointer(titlePtr)))
 
-	// 2. Если окно найдено — переключаем видимость
+	// 2. Если окно найдено — закрываем его принудительно
 	if hwnd != 0 {
-		ret, _, _ := isWindowVisible.Call(hwnd)
-		isVisible := ret != 0
+		log.Println("[ChatUI] Окно найдено, закрываем процесс.")
+		// Отправляем сообщение WM_CLOSE для корректного закрытия
+		_, _, _ = sendMessageTimeoutW.Call(
+			hwnd,
+			WM_CLOSE,
+			0,
+			0,
+			SMTO_ABORTIFHUNG,
+			2000, // 2 секунды таймаут
+		)
 
-		if isVisible {
-			// Скрываем
-			log.Println("[ChatUI] Окно найдено, скрываем.")
-			showWindow.Call(hwnd, SW_HIDE)
-		} else {
-			// Показываем
-			log.Println("[ChatUI] Окно найдено (скрыто), показываем.")
-			showWindow.Call(hwnd, SW_RESTORE)
-			setForegroundWindow.Call(hwnd)
+		// Ждем завершения процесса и очищаем переменную
+		if chatUIProcess != nil {
+			go func(p *os.Process) {
+				p.Wait()
+				chatUIMutex.Lock()
+				if chatUIProcess != nil && chatUIProcess.Pid == p.Pid {
+					log.Println("[Наблюдатель] Процесс ChatUI завершился.")
+					chatUIProcess = nil
+				}
+				chatUIMutex.Unlock()
+			}(chatUIProcess)
 		}
 		return
 	}
 
 	// 3. Если окно не найдено, проверяем состояние процесса
 	if chatUIProcess != nil {
-		// Если процесс жив, но окно не найдено, возможно оно еще создается
+		// Если процесс жив, но окно не найдено, возможно оно еще создается или уже завершается
 		if err := chatUIProcess.Signal(syscall.Signal(0)); err == nil {
 			log.Println("[ChatUI] Процесс запущен, но окно еще не найдено (инициализация?)")
 			return

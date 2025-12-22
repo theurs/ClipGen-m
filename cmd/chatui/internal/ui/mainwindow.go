@@ -488,17 +488,8 @@ func CreateAndRunMainWindow() {
 	})
 
 	// ИЗМЕНЕНИЕ: Обработка закрытия окна
-	// Вместо закрытия процесса, мы просто скрываем окно.
-	// Основное приложение (ClipGen-m) завершит этот процесс при своем выходе.
-	mainWindow.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
-		saveConfigImmediately()
-
-		// Отменяем стандартное закрытие
-		*canceled = true
-
-		// Скрываем окно
-		mainWindow.SetVisible(false)
-	})
+	// Убираем перехват события закрытия, чтобы окно полностью закрывалось
+	// и процесс завершался, когда пользователь закрывает окно.
 
 	mainWindow.Run()
 }
