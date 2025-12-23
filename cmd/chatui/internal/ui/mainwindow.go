@@ -158,6 +158,7 @@ func CreateAndRunMainWindow() {
 		currentChatID := chatCombo.Text()
 		if currentChatID == "" || currentChatID == "default" {
 			walk.MsgBox(mainWindow, "Ошибка", "Нельзя удалить этот чат.", walk.MsgBoxIconError)
+			inputTE.SetFocus() // Return focus to input field
 			return
 		}
 		res := walk.MsgBox(mainWindow, "Удаление", fmt.Sprintf("Удалить чат '%s'?", currentChatID), walk.MsgBoxYesNo|walk.MsgBoxIconWarning)
@@ -169,6 +170,7 @@ func CreateAndRunMainWindow() {
 			chatCombo.SetText("default")
 			loadSelectedChat()
 		}
+		inputTE.SetFocus() // Return focus to input field
 	}
 
 	clearHistory := func() {
@@ -179,6 +181,7 @@ func CreateAndRunMainWindow() {
 			historyTE.SetText("")
 			appendHistory("Система", "История очищена.")
 		}
+		inputTE.SetFocus() // Return focus to input field
 	}
 
 	openSettings := func() {
@@ -192,6 +195,7 @@ func CreateAndRunMainWindow() {
 			cfg.SetChatSettings(currentChatID, settings)
 			cfg.Save()
 		}
+		inputTE.SetFocus() // Return focus to input field
 	}
 
 	handlePaste := func() {
@@ -303,6 +307,7 @@ func CreateAndRunMainWindow() {
 			fileModel.Add([]string{dlg.FilePath})
 			updateFilesVisibility()
 		}
+		inputTE.SetFocus() // Return focus to input field
 	}
 
 	font12 := Font{Family: "Microsoft Sans Serif", PointSize: 12}
@@ -385,6 +390,7 @@ func CreateAndRunMainWindow() {
 														fileModel.Remove(idx)
 														updateFilesVisibility()
 													}
+													inputTE.SetFocus() // Return focus to input field
 												},
 											},
 											PushButton{
@@ -393,6 +399,7 @@ func CreateAndRunMainWindow() {
 												OnClicked: func() {
 													fileModel.Clear()
 													updateFilesVisibility()
+													inputTE.SetFocus() // Return focus to input field
 												},
 											},
 										},
