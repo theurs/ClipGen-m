@@ -1,1 +1,1 @@
-go build -o ghllm.exe main.go
+go build -o ghllm.exe

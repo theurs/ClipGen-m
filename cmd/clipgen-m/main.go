@@ -712,11 +712,17 @@ func setupTray() {
 	systray.AddSeparator()
 	mConfig := systray.AddMenuItem("Настройки (main)", "Редактировать config.yaml")
 	mMistralConf := systray.AddMenuItem("Mistral Config", "Редактировать mistral.conf")
+	mGeminillmConf := systray.AddMenuItem("Gemini Config", "Редактировать gemini.conf")
+	mGhllmConf := systray.AddMenuItem("Github Config", "Редактировать github.conf")
+	mGroqllmConf := systray.AddMenuItem("Groq Config", "Редактировать groq.conf")
 	mTavilyConf := systray.AddMenuItem("Tavily Config", "Редактировать tavily.conf")
 
 	systray.AddSeparator()
-	mMistralLog := systray.AddMenuItem("Mistral Log", "Просмотр mistral_err.log")
 	mLog := systray.AddMenuItem("ClipGen Log", "Посмотреть ошибки программы")
+	mMistralLog := systray.AddMenuItem("Mistral Log", "Просмотр mistral_err.log")
+	mGeminillmLog := systray.AddMenuItem("Gemini Log", "Просмотр gemini_err.log")
+	mGhllmLog := systray.AddMenuItem("Github Log", "Просмотр github_err.log")
+	mGroqllmLog := systray.AddMenuItem("Groq Log", "Просмотр groq_err.log")
 
 	systray.AddSeparator()
 	mReload := systray.AddMenuItem("Перезагрузка", "Применить конфиг")
@@ -760,10 +766,22 @@ func setupTray() {
 				openFileInConfigDir("mistral.conf")
 			case <-mTavilyConf.ClickedCh:
 				openFileInConfigDir("tavily.conf")
+			case <-mGeminillmConf.ClickedCh:
+				openFileInConfigDir("gemini.conf")
+			case <-mGhllmConf.ClickedCh:
+				openFileInConfigDir("github.conf")
+			case <-mGroqllmConf.ClickedCh:
+				openFileInConfigDir("groq.conf")
 
 			// Логи
 			case <-mMistralLog.ClickedCh:
 				openFileInConfigDir("mistral_err.log")
+			case <-mGeminillmLog.ClickedCh:
+				openFileInConfigDir("gemini_err.log")
+			case <-mGhllmLog.ClickedCh:
+				openFileInConfigDir("github_err.log")
+			case <-mGroqllmLog.ClickedCh:
+				openFileInConfigDir("groq_err.log")
 			case <-mLog.ClickedCh:
 				openLogFile()
 

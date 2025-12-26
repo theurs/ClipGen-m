@@ -1,1 +1,1 @@
-go build -o groqllm.exe main.go
+go build -o groqllm.exe
