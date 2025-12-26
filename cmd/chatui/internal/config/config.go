@@ -13,6 +13,7 @@ type ChatSettings struct {
 	SystemPrompt string  `json:"system_prompt"`
 	Temperature  float64 `json:"temperature"`
 	ModelMode    string  `json:"model_mode"` // "auto", "creative", "precise" и т.д.
+	LLMProvider  string  `json:"llm_provider"` // "mistral", "geminillm", "ghllm", "groqllm", "ollama" и т.д.
 }
 
 // Config глобальная конфигурация приложения
@@ -55,6 +56,7 @@ func Load() *Config {
 			SystemPrompt: "Ты полезный и точный ассистент. Не используй markdown разметку в своих ответах. Отвечай простым текстом без символов форматирования, звездочек, решеток и других элементов markdown. Для математических выражений используй Unicode символы вместо LaTeX формул. Формулы записывай обычным текстом с использованием математических символов Unicode.",
 			Temperature:  0.7,
 			ModelMode:    "auto",
+			LLMProvider:  "mistral",
 		},
 	}
 

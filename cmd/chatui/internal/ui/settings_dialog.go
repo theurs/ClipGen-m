@@ -22,18 +22,24 @@ func RunSettingsDialog(owner *walk.MainWindow, settings *config.ChatSettings) (b
 		SystemPrompt string
 		TempInt      int
 		ModelMode    string
+		LLMProvider  string
 	}
 
 	buf := formBuffer{
 		SystemPrompt: settings.SystemPrompt,
 		TempInt:      int(settings.Temperature * 100),
 		ModelMode:    settings.ModelMode,
+		LLMProvider:  settings.LLMProvider,
 	}
 	if buf.ModelMode == "" {
 		buf.ModelMode = "auto"
 	}
+	if buf.LLMProvider == "" {
+		buf.LLMProvider = "mistral"
+	}
 
 	modes := []string{"auto", "general", "code", "vision", "audio", "ocr"}
+	providers := []string{"mistral", "geminillm", "ghllm", "groqllm"}
 
 	// Запускаем диалог и сохраняем результат в переменную
 	result, err := Dialog{
@@ -44,10 +50,9 @@ func RunSettingsDialog(owner *walk.MainWindow, settings *config.ChatSettings) (b
 		MinSize:       Size{Width: 400, Height: 450},
 		Layout:        VBox{},
 		DataBinder: DataBinder{
-			AssignTo:       &db,
-			Name:           "settings",
-			DataSource:     &buf,
-			ErrorPresenter: ToolTipErrorPresenter{},
+			AssignTo:   &db,
+			Name:       "settings",
+			DataSource: &buf,
 		},
 		Children: []Widget{
 			GroupBox{
@@ -91,6 +96,18 @@ func RunSettingsDialog(owner *walk.MainWindow, settings *config.ChatSettings) (b
 			},
 
 			GroupBox{
+				Title:  "LLM Провайдер",
+				Layout: Grid{Columns: 2},
+				Children: []Widget{
+					Label{Text: "Провайдер:"},
+					ComboBox{
+						Value: Bind("LLMProvider"),
+						Model: providers,
+					},
+				},
+			},
+
+			GroupBox{
 				Title:  "Системный промпт",
 				Layout: VBox{},
 				Children: []Widget{
@@ -122,6 +139,7 @@ func RunSettingsDialog(owner *walk.MainWindow, settings *config.ChatSettings) (b
 							settings.SystemPrompt = buf.SystemPrompt
 							settings.Temperature = float64(buf.TempInt) / 100.0
 							settings.ModelMode = buf.ModelMode
+							settings.LLMProvider = buf.LLMProvider
 
 							dlg.Accept()
 						},

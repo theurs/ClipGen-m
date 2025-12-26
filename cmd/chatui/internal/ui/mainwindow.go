@@ -4,7 +4,7 @@ package ui
 import (
 	"clipgen-m-chatui/internal/chat"
 	"clipgen-m-chatui/internal/config"
-	"clipgen-m-chatui/internal/mistral"
+	"clipgen-m-chatui/internal/llm"
 	"context"
 	_ "embed"
 	"fmt"
@@ -279,7 +279,7 @@ func CreateAndRunMainWindow() {
 				cancel()
 			}()
 
-			opts := mistral.RunOptions{
+			opts := llm.RunOptions{
 				Prompt:       prompt,
 				ChatID:       currentChatID,
 				Files:        filesToSend,
@@ -288,9 +288,15 @@ func CreateAndRunMainWindow() {
 				ModelMode:    chatSettings.ModelMode,
 			}
 
-			answer, err := mistral.Run(ctx, opts)
+			answer := ""
+			provider, err := llm.GetProvider(chatSettings.LLMProvider)
 			if err != nil {
-				answer = "Ошибка: " + err.Error()
+				answer = "Ошибка инициализации LLM: " + err.Error()
+			} else {
+				answer, err = provider.Run(ctx, opts)
+				if err != nil {
+					answer = "Ошибка: " + err.Error()
+				}
 			}
 
 			mainWindow.Synchronize(func() {
