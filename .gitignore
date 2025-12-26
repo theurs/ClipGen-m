@@ -1,3 +1,4 @@
+.env
 *.exe
 rsrc.syso
 output*.txt
