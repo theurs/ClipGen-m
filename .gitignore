@@ -1,2 +1,3 @@
 *.exe
 rsrc.syso
+output*.txt
