@@ -13,7 +13,7 @@ if not exist "dist\windows-amd64" mkdir "dist\windows-amd64"
 REM Build binaries
 echo Building clipgen-m...
 cd cmd\clipgen-m
-go build -o ..\..\dist\windows-amd64\clipgen-m.exe
+go build -ldflags "-H=windowsgui" -o ..\..\dist\windows-amd64\clipgen-m.exe
 if !errorlevel! neq 0 (
     echo Error building clipgen-m
     exit /b !errorlevel!
@@ -22,11 +22,31 @@ cd ..\..
 
 echo Building chatui...
 cd cmd\chatui
-go build -o ..\..\dist\windows-amd64\ClipGen-m-chatui.exe
+
+REM Prepare resources for chatui
+if exist rsrc.syso del rsrc.syso
+if exist internal\ui\chatui.ico del internal\ui\chatui.ico
+
+REM Build Windows resources (icon and manifest)
+rsrc -manifest main.manifest -ico chatui.ico -o rsrc.syso
+if !errorlevel! neq 0 (
+    echo Warning: rsrc failed to create resources, continuing build...
+)
+
+REM Copy icon for Go embed
+copy /Y chatui.ico internal\ui\chatui.ico >nul
+
+REM Build the executable
+go build -ldflags "-H=windowsgui -s -w" -o ..\..\dist\windows-amd64\ClipGen-m-chatui.exe
 if !errorlevel! neq 0 (
     echo Error building chatui
     exit /b !errorlevel!
 )
+
+REM Cleanup temporary files
+if exist rsrc.syso del rsrc.syso
+if exist internal\ui\chatui.ico del internal\ui\chatui.ico
+
 cd ..\..
 
 echo Building geminillm...
@@ -59,6 +79,11 @@ cd ..\..
 REM Copy version file to build folder
 copy VERSION dist\windows-amd64\
 
+REM Copy icons from clipgen-m folder to build folder
+copy cmd\clipgen-m\icon.ico dist\windows-amd64\
+copy cmd\clipgen-m\icon_wait.ico dist\windows-amd64\
+copy cmd\clipgen-m\icon_stop.ico dist\windows-amd64\
+
 REM Archive
 echo Creating archive...
 cd dist\windows-amd64
@@ -90,3 +115,8 @@ if !errorlevel! equ 0 (
 )
 
 echo Build and publish completed!
+
+REM Cleanup dist folder
+echo Cleaning up dist folder...
+del /q dist\windows-amd64\*
+rmdir /s /q dist\windows-amd64
