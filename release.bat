@@ -76,6 +76,24 @@ if !errorlevel! neq 0 (
 )
 cd ..\..
 
+echo Building mistral...
+cd cmd\mistral
+go build -o ..\..\dist\windows-amd64\mistral.exe
+if !errorlevel! neq 0 (
+    echo Error building mistral
+    exit /b !errorlevel!
+)
+cd ..\..
+
+echo Building lua-executor...
+cd cmd\mistral\lua-executor
+go build -o ..\..\..\dist\windows-amd64\lua-executor.exe
+if !errorlevel! neq 0 (
+    echo Error building lua-executor
+    exit /b !errorlevel!
+)
+cd ..\..\..
+
 REM Copy version file to build folder
 copy VERSION dist\windows-amd64\
 
@@ -85,9 +103,9 @@ copy cmd\clipgen-m\icon_wait.ico dist\windows-amd64\
 copy cmd\clipgen-m\icon_stop.ico dist\windows-amd64\
 
 REM Archive
-echo Creating archive...
+echo Creating archive with maximum compression...
 cd dist\windows-amd64
-7z a -tzip "..\clipgen-m-v!VERSION!-windows-amd64.zip" *.*
+7z a -tzip -mx=9 "..\clipgen-m-v!VERSION!-windows-amd64.zip" *.*
 if !errorlevel! neq 0 (
     echo Error archiving
     exit /b !errorlevel!
