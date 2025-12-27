@@ -1,5 +1,5 @@
 .env
 *.exe
 rsrc.syso
-output*.txt
 dist/
+*.txt
