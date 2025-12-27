@@ -49,6 +49,7 @@ ClipGen-M - это набор утилит для взаимодействия �
 
 Каждая утилита имеет собственный `build.bat` файл для простой сборки:
 
+- `mistral/build.bat`
 - `geminillm/build.bat`
 - `ghllm/build.bat`
 - `groqllm/build.bat`
@@ -67,6 +68,7 @@ call build.bat
 
 Примеры:
 ```
+echo "Привет" | mistral.exe --system "Ты помощник" --temperature 0.7
 echo "Привет" | geminillm.exe --system "Ты помощник" --temperature 0.7
 echo "Привет" | ghllm.exe --mode general --json
 echo "Привет" | groqllm.exe --chat mychat --temperature 0.5
