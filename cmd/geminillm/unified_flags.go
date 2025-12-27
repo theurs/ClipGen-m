@@ -398,20 +398,20 @@ func requestGemini(apiKey, baseURL, model, system, prompt string, files []FileDa
 			searchToolName = "google_search"
 		}
 
-		// Проверяем, есть ли аудио файлы во входных данных
-		hasAudio := false
+		// Проверяем, есть ли аудио или видео файлы во входных данных
+		hasMedia := false
 		for _, file := range files {
-			if strings.HasPrefix(file.MimeType, "audio/") {
-				hasAudio = true
+			if strings.HasPrefix(file.MimeType, "audio/") || strings.HasPrefix(file.MimeType, "video/") {
+				hasMedia = true
 				break
 			}
 		}
 
-		// Для аудио файлов отключаем code_execution, т.к. он не поддерживает многие аудио форматы
-		if hasAudio {
+		// Для аудио и видео файлов отключаем code_execution, т.к. он не поддерживает многие форматы
+		if hasMedia {
 			req.Tools = []interface{}{
 				map[string]interface{}{searchToolName: map[string]interface{}{}},
-				// code_execution инструмент отключен для аудио файлов
+				// code_execution инструмент отключен для аудио/видео файлов
 			}
 		} else {
 			req.Tools = []interface{}{
@@ -676,6 +676,30 @@ func processFiles(paths []string) (res []FileData, hasImg, hasAudio, hasPdf bool
 			}
 		}
 
+		// Check if this is a video file
+		if strings.HasPrefix(mt, "video/") {
+			// For video files, normalize to a standard format
+			switch ext {
+			case ".mp4", ".m4v":
+				mt = "video/mp4"
+			case ".mov", ".qt":
+				mt = "video/quicktime"
+			case ".avi":
+				mt = "video/x-msvideo"
+			case ".wmv":
+				mt = "video/x-ms-wmv"
+			case ".webm":
+				mt = "video/webm"
+			case ".mkv":
+				mt = "video/x-matroska"
+			case ".m4a": // Sometimes m4a files can be handled as video
+				mt = "video/mp4"
+			default:
+				// For other video formats, use mp4 as a standard format
+				mt = "video/mp4"
+			}
+		}
+
 		if strings.HasPrefix(mt, "image/") {
 			hasImg = true
 		}
@@ -697,6 +721,11 @@ func processFiles(paths []string) (res []FileData, hasImg, hasAudio, hasPdf bool
 				// For other audio formats, use wav as a standard format that Gemini supports
 				mt = "audio/wav"
 			}
+		}
+		// Check for video files after audio processing
+		if strings.HasPrefix(mt, "video/") {
+			hasAudio = true // Treat video as audio for the purpose of disabling code execution
+			// Video files also need special handling - disable code execution tool
 		}
 		if mt == "application/pdf" {
 			hasPdf = true
