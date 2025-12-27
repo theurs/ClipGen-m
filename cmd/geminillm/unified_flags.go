@@ -398,20 +398,29 @@ func requestGemini(apiKey, baseURL, model, system, prompt string, files []FileDa
 			searchToolName = "google_search"
 		}
 
-		// Проверяем, есть ли аудио или видео файлы во входных данных
+		// Проверяем, есть ли аудио, видео или документы во входных данных
 		hasMedia := false
+		hasDocuments := false
 		for _, file := range files {
 			if strings.HasPrefix(file.MimeType, "audio/") || strings.HasPrefix(file.MimeType, "video/") {
 				hasMedia = true
-				break
+			}
+			if strings.HasPrefix(file.MimeType, "application/") &&
+				(strings.Contains(file.MimeType, "pdf") ||
+				 strings.Contains(file.MimeType, "wordprocessingml") ||
+				 strings.Contains(file.MimeType, "msword") ||
+				 strings.Contains(file.MimeType, "spreadsheetml") ||
+				 strings.Contains(file.MimeType, "ms-excel") ||
+				 strings.Contains(file.MimeType, "rtf")) {
+				hasDocuments = true
 			}
 		}
 
-		// Для аудио и видео файлов отключаем code_execution, т.к. он не поддерживает многие форматы
-		if hasMedia {
+		// Для аудио, видео и документов отключаем code_execution, т.к. он не поддерживает многие форматы
+		if hasMedia || hasDocuments {
 			req.Tools = []interface{}{
 				map[string]interface{}{searchToolName: map[string]interface{}{}},
-				// code_execution инструмент отключен для аудио/видео файлов
+				// code_execution инструмент отключен для аудио/видео/документов
 			}
 		} else {
 			req.Tools = []interface{}{
@@ -729,6 +738,71 @@ func processFiles(paths []string) (res []FileData, hasImg, hasAudio, hasPdf bool
 		}
 		if mt == "application/pdf" {
 			hasPdf = true
+		}
+
+		// Check for document formats that Gemini supports
+		if mt == "application/pdf" {
+			hasPdf = true
+		} else if strings.HasPrefix(mt, "application/") {
+			switch mt {
+			case "application/vnd.openxmlformats-officedocument.wordprocessingml.document": // .docx
+				hasPdf = true // Treat as document type
+			case "application/msword": // .doc
+				hasPdf = true // Treat as document type
+			case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": // .xlsx
+				hasPdf = true // Treat as document type
+			case "application/vnd.ms-excel": // .xls
+				hasPdf = true // Treat as document type
+			case "application/rtf", "application/x-rtf": // .rtf
+				hasPdf = true // Treat as document type
+			}
+		}
+
+		// Also check by file extension if MIME type detection failed
+		if !hasPdf {
+			ext := strings.ToLower(filepath.Ext(p))
+			switch ext {
+			case ".pdf":
+				hasPdf = true
+			case ".doc":
+				if mt == "" || mt == "application/octet-stream" {
+					mt = "application/msword"
+				}
+				hasPdf = true
+			case ".docx":
+				// According to API documentation, Gemini supports DOCX but may expect it as a different type
+				// Try sending as application/octet-stream or use text extraction approach
+				// For now, use the correct MIME type but the API may handle it internally
+				if mt == "" || mt == "application/octet-stream" {
+					mt = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+				}
+				hasPdf = true
+			case ".txt":
+				if mt == "" || mt == "application/octet-stream" {
+					mt = "text/plain"
+				}
+				hasPdf = true
+			case ".html":
+				if mt == "" || mt == "application/octet-stream" {
+					mt = "text/html"
+				}
+				hasPdf = true
+			case ".rtf":
+				if mt == "" || mt == "application/octet-stream" {
+					mt = "application/rtf"
+				}
+				hasPdf = true
+			case ".xls":
+				if mt == "" || mt == "application/octet-stream" {
+					mt = "application/vnd.ms-excel"
+				}
+				hasPdf = true
+			case ".xlsx":
+				if mt == "" || mt == "application/octet-stream" {
+					mt = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+				}
+				hasPdf = true
+			}
 		}
 		res = append(res, FileData{
 			Name: filepath.Base(p), MimeType: mt,
