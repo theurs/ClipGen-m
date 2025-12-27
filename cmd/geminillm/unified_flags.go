@@ -10,6 +10,7 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -296,6 +297,9 @@ func mainUnified() {
 		shuffledKeys[i], shuffledKeys[j] = shuffledKeys[j], shuffledKeys[i]
 	})
 
+	// Счетчик неудачных ключей подряд
+	failedKeysCount := 0
+
 	// Согласно правилу: Сначала перебираем модели для текущего ключа,
 	// и только если все модели на этом ключе выдали 429, переходим к следующему ключу.
 	for _, apiKey := range shuffledKeys {
@@ -304,6 +308,9 @@ func mainUnified() {
 		if len(apiKey) > 4 {
 			keySuffix = apiKey[len(apiKey)-4:]
 		}
+
+		// Счетчик неудачных попыток для текущего ключа
+		failedModelsForCurrentKey := 0
 
 		for _, modelName := range modelsList {
 			logVerbose("Запрос: ключ=...%s, модель=%s, режим=%s", keySuffix, modelName, mode)
@@ -336,6 +343,9 @@ func mainUnified() {
 				break
 			}
 
+			// Увеличиваем счетчик неудачных попыток для текущего ключа
+			failedModelsForCurrentKey++
+
 			// Если ошибка 429 (лимит) или любая другая (500, 400),
 			// пробуем следующую модель в списке (понижаем версию) для этого же ключа.
 			if strings.Contains(errMsg, "429") {
@@ -345,6 +355,20 @@ func mainUnified() {
 
 			// Для прочих ошибок тоже пробуем сменить модель
 			continue
+		}
+
+		// Если все модели для текущего ключа провалились, увеличиваем счетчик неудачных ключей
+		if failedModelsForCurrentKey == len(modelsList) {
+			failedKeysCount++
+
+			// Если 2 ключа подряд полностью провалились, прекращаем попытки
+			if failedKeysCount >= 2 {
+				logVerbose("2 ключа подряд полностью провалились. Прекращаем попытки.")
+				break
+			}
+		} else {
+			// Сбрасываем счетчик, если хотя бы один ключ был успешным
+			failedKeysCount = 0
 		}
 	}
 
@@ -374,9 +398,26 @@ func requestGemini(apiKey, baseURL, model, system, prompt string, files []FileDa
 			searchToolName = "google_search"
 		}
 
-		req.Tools = []interface{}{
-			map[string]interface{}{searchToolName: map[string]interface{}{}},
-			map[string]interface{}{"code_execution": map[string]interface{}{}},
+		// Проверяем, есть ли аудио файлы во входных данных
+		hasAudio := false
+		for _, file := range files {
+			if strings.HasPrefix(file.MimeType, "audio/") {
+				hasAudio = true
+				break
+			}
+		}
+
+		// Для аудио файлов отключаем code_execution, т.к. он не поддерживает многие аудио форматы
+		if hasAudio {
+			req.Tools = []interface{}{
+				map[string]interface{}{searchToolName: map[string]interface{}{}},
+				// code_execution инструмент отключен для аудио файлов
+			}
+		} else {
+			req.Tools = []interface{}{
+				map[string]interface{}{searchToolName: map[string]interface{}{}},
+				map[string]interface{}{"code_execution": map[string]interface{}{}},
+			}
 		}
 	} else {
 		prompt = fmt.Sprintf("SYSTEM INSTRUCTION: %s\n\nUSER REQUEST: %s", system, prompt)
@@ -432,13 +473,11 @@ func requestGemini(apiKey, baseURL, model, system, prompt string, files []FileDa
 			status := apiErr.Error.Status
 			msg := apiErr.Error.Message
 
-			// Сокращаем типичные сообщения об ошибках
+			// Сокращаем только 429 ошибки (лимиты), остальные показываем полностью
 			if status == "RESOURCE_EXHAUSTED" {
 				return "", fmt.Errorf("HTTP 429 [RESOURCE_EXHAUSTED]: Limit exceeded")
 			}
-			if len(msg) > 60 {
-				msg = msg[:60] + "..."
-			}
+			// Для других ошибок, включая 400, показываем полное сообщение
 			return "", fmt.Errorf("HTTP %d [%s]: %s", resp.StatusCode, status, msg)
 		}
 
@@ -600,12 +639,64 @@ func processFiles(paths []string) (res []FileData, hasImg, hasAudio, hasPdf bool
 		if err != nil {
 			continue
 		}
+
+		// First try to detect MIME type by content (more reliable)
 		mt := mime.TypeByExtension(filepath.Ext(p))
+		contentType := http.DetectContentType(data)
+
+		// If mime.TypeByExtension doesn't return an audio type but content detection does,
+		// use the content detection result
+		if !strings.HasPrefix(mt, "audio/") && strings.HasPrefix(contentType, "audio/") {
+			mt = contentType
+		} else if mt == "" || mt == "application/octet-stream" {
+			// Fallback to content detection if extension-based detection fails
+			mt = contentType
+		}
+
+		// Additional check: if we have an OGG file that was detected as application/ogg,
+		// treat it as audio since OGG files are typically audio/video containers
+		if mt == "application/ogg" || mt == "application/opus" {
+			mt = "audio/ogg"  // Normalize to audio type
+		}
+
+		// Check if this is an unsupported audio format that needs transcoding
+		ext := strings.ToLower(filepath.Ext(p))
+		needsTranscoding := (ext == ".amr") // Add other formats as needed
+
+		if needsTranscoding {
+			// Transcode using ffmpeg to a supported format (WAV)
+			transcodedData, err := transcodeAudioWithFFmpeg(p)
+			if err != nil {
+				logVerbose("Warning: Could not transcode %s: %v. Attempting to use original file.", p, err)
+				// Fall back to original file if transcoding fails
+			} else {
+				// Use transcoded data instead of original
+				data = transcodedData
+				mt = "audio/wav" // Set to the format we're transcoding to
+			}
+		}
+
 		if strings.HasPrefix(mt, "image/") {
 			hasImg = true
 		}
 		if strings.HasPrefix(mt, "audio/") {
 			hasAudio = true
+			// Normalize audio MIME types for better Gemini API compatibility
+			// Use appropriate audio format based on file extension when possible
+			ext := strings.ToLower(filepath.Ext(p))
+			switch ext {
+			case ".mp3":
+				mt = "audio/mpeg"
+			case ".wav":
+				mt = "audio/wav"
+			case ".m4a", ".mp4":
+				mt = "audio/mp4"
+			case ".ogg", ".opus":
+				mt = "audio/ogg"
+			default:
+				// For other audio formats, use wav as a standard format that Gemini supports
+				mt = "audio/wav"
+			}
 		}
 		if mt == "application/pdf" {
 			hasPdf = true
@@ -616,6 +707,38 @@ func processFiles(paths []string) (res []FileData, hasImg, hasAudio, hasPdf bool
 		})
 	}
 	return
+}
+
+// transcodeAudioWithFFmpeg transcodes an audio file to WAV format using ffmpeg
+func transcodeAudioWithFFmpeg(inputPath string) ([]byte, error) {
+	// Create a temporary file for the output
+	tempOutput, err := os.CreateTemp("", "transcoded_*.wav")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp file: %v", err)
+	}
+	tempPath := tempOutput.Name()
+	tempOutput.Close()
+	defer os.Remove(tempPath) // Clean up temp file
+
+	// Run ffmpeg command: ffmpeg -i input.ext -ar 16000 -ac 1 -b:a 64k output.wav
+	cmd := exec.Command("ffmpeg", "-i", inputPath, "-ar", "16000", "-ac", "1", "-b:a", "64k", "-y", tempPath)
+
+	// Capture stderr for error reporting
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	err = cmd.Run()
+	if err != nil {
+		return nil, fmt.Errorf("ffmpeg failed: %v, stderr: %s", err, stderr.String())
+	}
+
+	// Read the transcoded file
+	transcodedData, err := os.ReadFile(tempPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read transcoded file: %v", err)
+	}
+
+	return transcodedData, nil
 }
 
 func determineMode(flag, prompt string, hasImg, hasPdf bool) string {
