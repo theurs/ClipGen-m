@@ -609,7 +609,9 @@ func processImage(imageBytes []byte, action Action) (string, error) {
 		return "", err
 	}
 	defer os.Remove(tempFile)
-	finalPrompt, pErr := preparePrompt(action.Prompt, action.Name)
+	// Удаляем тег {{.clipboard}}, так как в режиме картинки данные передаются как вложение, а не текст
+	cleanPrompt := strings.ReplaceAll(action.Prompt, "{{.clipboard}}", "")
+	finalPrompt, pErr := preparePrompt(cleanPrompt, action.Name) // Используем очищенный промпт
 	if pErr != nil {
 		return "", nil
 	}
@@ -627,7 +629,9 @@ func processFiles(files []string, action Action) (string, error) {
 			finalFileList = append(finalFileList, f)
 		}
 	}
-	finalPrompt, err := preparePrompt(action.Prompt, action.Name)
+	// Очищаем промпт от текстового тега, чтобы не путать логику мультимодальных моделей
+	cleanPrompt := strings.ReplaceAll(action.Prompt, "{{.clipboard}}", "")
+	finalPrompt, err := preparePrompt(cleanPrompt, action.Name) // Используем очищенный промпт
 	if err != nil {
 		return "", nil
 	}
@@ -1140,7 +1144,7 @@ actions:
   - name: "Исправить текст (F1)"
     hotkey: "Ctrl+F1"
     prompt: |
-      Подправь грамматику, пунктуацию и стиль, но не делай идеально, как в книге. Просто сделай так, будто текст написал грамотный человек (но не заучка и не задрот). Оставь оригинальный язык текста, не переводи его на другой язык. Верни ТОЛЬКО исправленный текст.
+      Подправь грамматику, пунктуацию и стиль, но не делай идеально, как в книге, не используй типографические кавычки, двоеточие, длинное тире итп, живые люди их никогда не используют. Просто сделай так, будто текст написал грамотный человек (но не заучка и не задрот). Оставь оригинальный язык текста, не переводи его на другой язык. Верни ТОЛЬКО исправленный текст.
       Текст: {{.clipboard}}
     input_type: "text"
     output_mode: "replace"
