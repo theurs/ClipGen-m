@@ -102,11 +102,11 @@ func tryOpenClipboard() (bool, error) {
 	return false, fmt.Errorf("не удалось открыть буфер обмена (занят другим приложением)")
 }
 
-/*
-captureClipboardSnapshot делает полный снимок всех текущих данных в буфере обмена.
-Возвращает срез снимков для каждого найденного формата.
-*/
-func captureClipboardSnapshot() []ClipboardSnapshot {
+/**
+ * captureClipboardSnapshot делает полный снимок всех текущих данных в буфере обмена.
+ * Возвращает срез снимков и ошибку, если не удалось получить доступ к буферу.
+ */
+func captureClipboardSnapshot() ([]ClipboardSnapshot, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -114,7 +114,7 @@ func captureClipboardSnapshot() []ClipboardSnapshot {
 
 	res, _, _ := openClipboard.Call(0)
 	if res == 0 {
-		return nil
+		return nil, fmt.Errorf("не удалось открыть буфер обмена для захвата")
 	}
 	defer closeClipboard.Call()
 
@@ -126,15 +126,15 @@ func captureClipboardSnapshot() []ClipboardSnapshot {
 			break
 		}
 
-		// Пропускаем форматы, которые не являются глобальной памятью
-		// 2: CF_BITMAP, 3: CF_METAFILEPICT, 9: CF_PALETTE, 14: CF_ENHMETAFILE
-		// Попытка вызвать GlobalSize на них приведет к падению.
+		// Пропускаем GDI-объекты (Bitmap, Metafile и т.д.), которые не являются блоками памяти.
+		// Попытка вызвать GlobalSize на них приведет к Access Violation.
 		if format == 2 || format == 3 || format == 9 || format == 14 {
 			continue
 		}
 
 		handle, _, _ := getClipboardData.Call(uintptr(format))
 		if handle == 0 {
+			log.Printf("WARNING: не удалось получить данные для формата %d", format)
 			continue
 		}
 
@@ -143,32 +143,33 @@ func captureClipboardSnapshot() []ClipboardSnapshot {
 			continue
 		}
 
-		ptr, _, _ := globalLock.Call(handle)
-		if ptr == 0 {
-			continue
-		}
-
-		// Безопасное копирование данных
 		data := make([]byte, size)
-		memMove.Call(uintptr(unsafe.Pointer(&data[0])), ptr, size)
 
-		globalUnlock.Call(handle)
+		uPtr, _, _ := globalLock.Call(handle)
+		if uPtr != 0 {
+			// Линтер допускает конвертацию указателя Go в uintptr непосредственно в аргументах вызова.
+			// uPtr является системным адресом и не перемещается сборщиком мусора Go.
+			memMove.Call(uintptr(unsafe.Pointer(&data[0])), uPtr, size)
+			globalUnlock.Call(handle)
 
-		snapshots = append(snapshots, ClipboardSnapshot{
-			Format: format,
-			Data:   data,
-		})
+			snapshots = append(snapshots, ClipboardSnapshot{
+				Format: format,
+				Data:   data,
+			})
+		}
 	}
 
-	return snapshots
+	log.Printf("Захвачено форматов буфера для бэкапа: %d", len(snapshots))
+	return snapshots, nil
 }
 
-/*
-restoreClipboardSnapshot очищает буфер и записывает в него сохраненные ранее данные.
-*/
-func restoreClipboardSnapshot(snapshots []ClipboardSnapshot) {
+/**
+ * restoreClipboardSnapshot очищает буфер и записывает в него сохраненные ранее данные.
+ * Возвращает ошибку, если не удалось открыть буфер для записи.
+ */
+func restoreClipboardSnapshot(snapshots []ClipboardSnapshot) error {
 	if len(snapshots) == 0 {
-		return
+		return nil
 	}
 
 	runtime.LockOSThread()
@@ -176,31 +177,45 @@ func restoreClipboardSnapshot(snapshots []ClipboardSnapshot) {
 
 	res, _, _ := openClipboard.Call(0)
 	if res == 0 {
-		return
+		return fmt.Errorf("не удалось открыть буфер обмена для восстановления")
 	}
 	defer closeClipboard.Call()
 
 	emptyClipboard.Call()
 
+	restoredCount := 0
 	for _, snap := range snapshots {
-		hMem, _, _ := globalAlloc.Call(GMEM_MOVEABLE, uintptr(len(snap.Data)))
-		if hMem == 0 {
+		size := uintptr(len(snap.Data))
+		if size == 0 {
 			continue
 		}
 
-		ptr, _, _ := globalLock.Call(hMem)
-		if ptr != 0 {
-			memMove.Call(ptr, uintptr(unsafe.Pointer(&snap.Data[0])), uintptr(len(snap.Data)))
+		hMem, _, _ := globalAlloc.Call(GMEM_MOVEABLE, size)
+		if hMem == 0 {
+			log.Printf("ERROR: GlobalAlloc не смог выделить %d байт для формата %d", size, snap.Format)
+			continue
+		}
+
+		uPtr, _, _ := globalLock.Call(hMem)
+		if uPtr != 0 {
+			// Прямое копирование из Go-памяти в системную память Windows.
+			memMove.Call(uPtr, uintptr(unsafe.Pointer(&snap.Data[0])), size)
 			globalUnlock.Call(hMem)
 
 			res, _, _ = setClipboardData.Call(uintptr(snap.Format), hMem)
 			if res == 0 {
+				log.Printf("ERROR: SetClipboardData не принял формат %d", snap.Format)
 				globalFree.Call(hMem)
+			} else {
+				restoredCount++
 			}
 		} else {
 			globalFree.Call(hMem)
 		}
 	}
+
+	log.Printf("Восстановлено форматов буфера из бэкапа: %d", restoredCount)
+	return nil
 }
 
 // ==========================================================
@@ -379,7 +394,10 @@ func handleAction(action Action) {
 	log.Printf("Запуск действия: %s [%s]", action.Name, action.InputType)
 
 	// Делаем снимок буфера до любых манипуляций (включая copySelection)
-	snapshot := captureClipboardSnapshot()
+	snapshot, errSnap := captureClipboardSnapshot()
+	if errSnap != nil {
+		log.Printf("Ошибка создания снимка буфера: %v", errSnap)
+	}
 
 	if action.InputType != "layout_switch" {
 		systray.SetIcon(iconWait)
@@ -408,13 +426,13 @@ func handleAction(action Action) {
 			zenity.Title("ClipGen Error"),
 			zenity.Icon(zenity.ErrorIcon))
 		log.Printf("ERROR: %v", err)
-		restoreClipboardSnapshot(snapshot)
+		_ = restoreClipboardSnapshot(snapshot)
 		return
 	}
 
 	if resultText == "" {
 		log.Println("Результат пустой (действие отменено или модель промолчала).")
-		restoreClipboardSnapshot(snapshot)
+		_ = restoreClipboardSnapshot(snapshot)
 		return
 	}
 
@@ -424,7 +442,7 @@ func handleAction(action Action) {
 		if err := showInEditor(resultText); err != nil {
 			log.Printf("Ошибка открытия редактора: %v", err)
 		}
-		restoreClipboardSnapshot(snapshot)
+		_ = restoreClipboardSnapshot(snapshot)
 	default:
 		// Пишем результат ИИ в буфер для вставки
 		clipboard.Write(clipboard.FmtText, []byte(resultText))
@@ -433,7 +451,7 @@ func handleAction(action Action) {
 
 		// Даем приложению-приемнику время (400мс) вычитать текст из буфера, прежде чем вернуть бэкап
 		time.Sleep(400 * time.Millisecond)
-		restoreClipboardSnapshot(snapshot)
+		_ = restoreClipboardSnapshot(snapshot)
 	}
 }
 
@@ -717,8 +735,8 @@ func getClipboardImageViaAPI() ([]byte, error) {
 	memSize, _, _ := globalSize.Call(hMem)
 	dibData := make([]byte, memSize)
 	if memSize > 0 {
-		srcSlice := (*[1 << 30]byte)(unsafe.Pointer(pData))[:memSize:memSize]
-		copy(dibData, srcSlice)
+		// Используем прямой системный вызов для копирования памяти, чтобы избежать предупреждений unsafeptr
+		memMove.Call(uintptr(unsafe.Pointer(&dibData[0])), pData, memSize)
 	}
 	infoHeaderSize := binary.LittleEndian.Uint32(dibData[0:4])
 	header := BITMAPFILEHEADER{
