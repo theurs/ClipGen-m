@@ -54,8 +54,14 @@ var (
 	sendMessageTimeoutW      = user32.NewProc("SendMessageTimeoutW")
 
 	// Новые функции для управления видимостью
-	showWindow      = user32.NewProc("ShowWindow")
-	isWindowVisible = user32.NewProc("IsWindowVisible")
+	showWindow           = user32.NewProc("ShowWindow")
+	isWindowVisible      = user32.NewProc("IsWindowVisible")
+	enumClipboardFormats = user32.NewProc("EnumClipboardFormats")
+	emptyClipboard       = user32.NewProc("EmptyClipboard")
+	setClipboardData     = user32.NewProc("SetClipboardData")
+	globalAlloc          = kernel32.NewProc("GlobalAlloc")
+	globalFree           = kernel32.NewProc("GlobalFree")
+	memMove              = kernel32.NewProc("RtlMoveMemory")
 )
 
 const (
@@ -64,6 +70,7 @@ const (
 	WM_CLOSE         = 0x0010
 	SMTO_ABORTIFHUNG = 0x0002
 	MOD_NOREPEAT     = 0x4000
+	GMEM_MOVEABLE    = 0x0002
 
 	// Константы для ShowWindow
 	SW_HIDE    = 0
@@ -78,6 +85,12 @@ type BITMAPFILEHEADER struct {
 	BfOffBits   uint32
 }
 
+// ClipboardSnapshot хранит данные одного формата буфера для бэкапа
+type ClipboardSnapshot struct {
+	Format uint32
+	Data   []byte
+}
+
 func tryOpenClipboard() (bool, error) {
 	for i := 0; i < 20; i++ {
 		r, _, _ := openClipboard.Call(0)
@@ -87,6 +100,107 @@ func tryOpenClipboard() (bool, error) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	return false, fmt.Errorf("не удалось открыть буфер обмена (занят другим приложением)")
+}
+
+/*
+captureClipboardSnapshot делает полный снимок всех текущих данных в буфере обмена.
+Возвращает срез снимков для каждого найденного формата.
+*/
+func captureClipboardSnapshot() []ClipboardSnapshot {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	var snapshots []ClipboardSnapshot
+
+	res, _, _ := openClipboard.Call(0)
+	if res == 0 {
+		return nil
+	}
+	defer closeClipboard.Call()
+
+	format := uint32(0)
+	for {
+		res, _, _ = enumClipboardFormats.Call(uintptr(format))
+		format = uint32(res)
+		if format == 0 {
+			break
+		}
+
+		// Пропускаем форматы, которые не являются глобальной памятью
+		// 2: CF_BITMAP, 3: CF_METAFILEPICT, 9: CF_PALETTE, 14: CF_ENHMETAFILE
+		// Попытка вызвать GlobalSize на них приведет к падению.
+		if format == 2 || format == 3 || format == 9 || format == 14 {
+			continue
+		}
+
+		handle, _, _ := getClipboardData.Call(uintptr(format))
+		if handle == 0 {
+			continue
+		}
+
+		size, _, _ := globalSize.Call(handle)
+		if size == 0 {
+			continue
+		}
+
+		ptr, _, _ := globalLock.Call(handle)
+		if ptr == 0 {
+			continue
+		}
+
+		// Безопасное копирование данных
+		data := make([]byte, size)
+		memMove.Call(uintptr(unsafe.Pointer(&data[0])), ptr, size)
+
+		globalUnlock.Call(handle)
+
+		snapshots = append(snapshots, ClipboardSnapshot{
+			Format: format,
+			Data:   data,
+		})
+	}
+
+	return snapshots
+}
+
+/*
+restoreClipboardSnapshot очищает буфер и записывает в него сохраненные ранее данные.
+*/
+func restoreClipboardSnapshot(snapshots []ClipboardSnapshot) {
+	if len(snapshots) == 0 {
+		return
+	}
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	res, _, _ := openClipboard.Call(0)
+	if res == 0 {
+		return
+	}
+	defer closeClipboard.Call()
+
+	emptyClipboard.Call()
+
+	for _, snap := range snapshots {
+		hMem, _, _ := globalAlloc.Call(GMEM_MOVEABLE, uintptr(len(snap.Data)))
+		if hMem == 0 {
+			continue
+		}
+
+		ptr, _, _ := globalLock.Call(hMem)
+		if ptr != 0 {
+			memMove.Call(ptr, uintptr(unsafe.Pointer(&snap.Data[0])), uintptr(len(snap.Data)))
+			globalUnlock.Call(hMem)
+
+			res, _, _ = setClipboardData.Call(uintptr(snap.Format), hMem)
+			if res == 0 {
+				globalFree.Call(hMem)
+			}
+		} else {
+			globalFree.Call(hMem)
+		}
+	}
 }
 
 // ==========================================================
@@ -264,6 +378,9 @@ func actionProcessor() {
 func handleAction(action Action) {
 	log.Printf("Запуск действия: %s [%s]", action.Name, action.InputType)
 
+	// Делаем снимок буфера до любых манипуляций (включая copySelection)
+	snapshot := captureClipboardSnapshot()
+
 	if action.InputType != "layout_switch" {
 		systray.SetIcon(iconWait)
 		defer systray.SetIcon(iconNormal)
@@ -291,11 +408,13 @@ func handleAction(action Action) {
 			zenity.Title("ClipGen Error"),
 			zenity.Icon(zenity.ErrorIcon))
 		log.Printf("ERROR: %v", err)
+		restoreClipboardSnapshot(snapshot)
 		return
 	}
 
 	if resultText == "" {
 		log.Println("Результат пустой (действие отменено или модель промолчала).")
+		restoreClipboardSnapshot(snapshot)
 		return
 	}
 
@@ -305,10 +424,16 @@ func handleAction(action Action) {
 		if err := showInEditor(resultText); err != nil {
 			log.Printf("Ошибка открытия редактора: %v", err)
 		}
+		restoreClipboardSnapshot(snapshot)
 	default:
+		// Пишем результат ИИ в буфер для вставки
 		clipboard.Write(clipboard.FmtText, []byte(resultText))
 		time.Sleep(200 * time.Millisecond)
 		paste()
+
+		// Даем приложению-приемнику время (400мс) вычитать текст из буфера, прежде чем вернуть бэкап
+		time.Sleep(400 * time.Millisecond)
+		restoreClipboardSnapshot(snapshot)
 	}
 }
 
@@ -997,7 +1122,7 @@ actions:
   - name: "Исправить текст (F1)"
     hotkey: "Ctrl+F1"
     prompt: |
-      Исправь грамматику, пунктуацию и стиль. Не надо переводить на другой язык. Верни ТОЛЬКО исправленный текст.
+      Подправь грамматику, пунктуацию и стиль, но не делай идеально, как в книге. Просто сделай так, будто текст написал грамотный человек (но не заучка и не задрот). Оставь оригинальный язык текста, не переводи его на другой язык. Верни ТОЛЬКО исправленный текст.
       Текст: {{.clipboard}}
     input_type: "text"
     output_mode: "replace"
