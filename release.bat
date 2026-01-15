@@ -76,6 +76,15 @@ if !errorlevel! neq 0 (
 )
 cd ..\..
 
+echo Building pollinationsllm...
+cd cmd\pollinationsllm
+go build -o ..\..\dist\windows-amd64\plnllm.exe
+if !errorlevel! neq 0 (
+    echo Error building pollinationsllm
+    exit /b !errorlevel!
+)
+cd ..\..
+
 echo Building mistral...
 cd cmd\mistral
 go build -o ..\..\dist\windows-amd64\mistral.exe

@@ -862,6 +862,7 @@ func setupTray() {
 	mGeminillmConf := systray.AddMenuItem("Gemini Config", "Редактировать gemini.conf")
 	mGhllmConf := systray.AddMenuItem("Github Config", "Редактировать github.conf")
 	mGroqllmConf := systray.AddMenuItem("Groq Config", "Редактировать groq.conf")
+	mPlnConf := systray.AddMenuItem("Pollinations Config", "Редактировать pollinations.conf")
 	mTavilyConf := systray.AddMenuItem("Tavily Config", "Редактировать tavily.conf")
 
 	systray.AddSeparator()
@@ -870,6 +871,7 @@ func setupTray() {
 	mGeminillmLog := systray.AddMenuItem("Gemini Log", "Просмотр gemini_err.log")
 	mGhllmLog := systray.AddMenuItem("Github Log", "Просмотр github_err.log")
 	mGroqllmLog := systray.AddMenuItem("Groq Log", "Просмотр groq_err.log")
+	mPlnLog := systray.AddMenuItem("Pollinations Log", "Просмотр pollinations_err.log")
 
 	systray.AddSeparator()
 	mReload := systray.AddMenuItem("Перезагрузка", "Применить конфиг")
@@ -919,6 +921,8 @@ func setupTray() {
 				openFileInConfigDir("github.conf")
 			case <-mGroqllmConf.ClickedCh:
 				openFileInConfigDir("groq.conf")
+			case <-mPlnConf.ClickedCh:
+				openFileInConfigDir("pollinations.conf")
 
 			// Логи
 			case <-mMistralLog.ClickedCh:
@@ -929,6 +933,8 @@ func setupTray() {
 				openFileInConfigDir("github_err.log")
 			case <-mGroqllmLog.ClickedCh:
 				openFileInConfigDir("groq_err.log")
+			case <-mPlnLog.ClickedCh:
+				openFileInConfigDir("pollinations_err.log")
 			case <-mLog.ClickedCh:
 				openLogFile()
 

@@ -39,7 +39,7 @@ func RunSettingsDialog(owner *walk.MainWindow, settings *config.ChatSettings) (b
 	}
 
 	modes := []string{"auto", "general", "code", "vision", "audio", "ocr"}
-	providers := []string{"mistral", "geminillm", "ghllm", "groqllm"}
+	providers := []string{"mistral", "geminillm", "ghllm", "groqllm", "plnllm"}
 
 	// Запускаем диалог и сохраняем результат в переменную
 	result, err := Dialog{
