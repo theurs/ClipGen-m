@@ -13,12 +13,14 @@
 - `Geminillm Config` - редактировать gemini.conf
 - `Ghllm Config` - редактировать github.conf
 - `Groqllm Config` - редактировать groq.conf
+- `Pollinations Config` - редактировать pollinations.conf
 
 ### Файлы логов:
 - `Mistral Log` - просмотр mistral_err.log
 - `Geminillm Log` - просмотр gemini_err.log
 - `Ghllm Log` - просмотр github_err.log
 - `Groqllm Log` - просмотр groq_err.log
+- `Pollinations Log` - просмотр pollinations_err.log
 - `ClipGen Log` - просмотр ошибок программы
 
 ## Расположение файлов
