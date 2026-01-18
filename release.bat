@@ -106,10 +106,11 @@ cd ..\..\..
 REM Copy version file to build folder
 copy VERSION dist\windows-amd64\
 
-REM Copy icons from clipgen-m folder to build folder
-copy cmd\clipgen-m\icon.ico dist\windows-amd64\
-copy cmd\clipgen-m\icon_wait.ico dist\windows-amd64\
-copy cmd\clipgen-m\icon_stop.ico dist\windows-amd64\
+REM  Копирование иконок удалено, так как они теперь вшиты в бинарник через //go:embed
+: REM Copy icons from clipgen-m folder to build folder
+: copy cmd\clipgen-m\icon.ico dist\windows-amd64\
+: copy cmd\clipgen-m\icon_wait.ico dist\windows-amd64\
+: copy cmd\clipgen-m\icon_stop.ico dist\windows-amd64\
 
 REM Archive
 echo Creating archive with maximum compression...

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/binary"
 	"fmt"
 	"image"
@@ -247,9 +248,15 @@ type HotkeyControl struct {
 }
 
 var (
-	iconNormal   []byte
-	iconWait     []byte
-	iconStop     []byte
+	//go:embed icon.ico
+	iconNormal []byte
+
+	//go:embed icon_wait.ico
+	iconWait []byte
+
+	//go:embed icon_stop.ico
+	iconStop []byte
+
 	config       Config
 	logFile      *os.File
 	inputHistory = make(map[string]string)
@@ -1192,13 +1199,12 @@ actions:
 }
 
 func loadIcons() {
-	exePath, _ := os.Executable()
-	dir := filepath.Dir(exePath)
-	iconNormal, _ = os.ReadFile(filepath.Join(dir, "icon.ico"))
-	iconWait, _ = os.ReadFile(filepath.Join(dir, "icon_wait.ico"))
-	iconStop, _ = os.ReadFile(filepath.Join(dir, "icon_stop.ico"))
+	/**
+	 * loadIcons больше не читает файлы с диска.
+	 * Иконки вшиты в бинарник через //go:embed.
+	 */
 	if len(iconNormal) == 0 {
-		iconNormal, _ = os.ReadFile("icon.ico")
+		log.Println("WARNING: Normal icon is empty (embedded)")
 	}
 	if len(iconWait) == 0 {
 		iconWait = iconNormal
