@@ -146,5 +146,6 @@ echo Build and publish completed!
 
 REM Cleanup dist folder
 echo Cleaning up dist folder...
+if exist dist\*.zip del /q dist\*.zip
 del /q dist\windows-amd64\*
 rmdir /s /q dist\windows-amd64
