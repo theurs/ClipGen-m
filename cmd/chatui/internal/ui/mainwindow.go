@@ -199,27 +199,49 @@ func CreateAndRunMainWindow() {
 	}
 
 	handlePaste := func() {
-		inputTE.SendMessage(0x0302, 0, 0)
+		// Удалено SendMessage(0x0302), так как система сама вставляет текст,
+		// что приводило к дублированию.
 		go func() {
 			time.Sleep(50 * time.Millisecond)
 			mainWindow.Synchronize(func() {
+				// 1. Проверяем системное копирование файлов (CF_HDROP)
 				if HasClipboardFiles() {
 					files, err := GetClipboardFiles()
 					if err == nil && len(files) > 0 {
 						fileModel.Add(files)
 						updateFilesVisibility()
+						// Если это были файлы, очищаем поле ввода от путей-текста
+						inputTE.SetText("")
 						return
 					}
 				}
+				// 2. Проверяем наличие изображения в буфере
 				if HasClipboardImage() {
 					path, err := SaveClipboardImageToTemp()
 					if err == nil && path != "" {
 						fileModel.Add([]string{path})
 						updateFilesVisibility()
+						inputTE.SetText("") // Очищаем поле при вставке картинки
 					} else if err != nil {
 						walk.MsgBox(mainWindow, "Ошибка", "Не удалось вставить изображение: "+err.Error(), walk.MsgBoxIconError)
 					}
 					return
+				}
+
+				// 3. НОВОЕ: Проверяем, является ли вставленный текст путем к файлу
+				text, _ := walk.Clipboard().Text()
+				if text != "" {
+					cleanedPath := strings.Trim(strings.TrimSpace(text), "\"")
+					// Проверяем, существует ли файл по этому пути
+					if info, err := os.Stat(cleanedPath); err == nil && !info.IsDir() {
+						fileModel.Add([]string{cleanedPath})
+						updateFilesVisibility()
+
+						// Если в поле ввода только этот путь, очищаем его
+						if strings.TrimSpace(inputTE.Text()) == cleanedPath {
+							inputTE.SetText("")
+						}
+					}
 				}
 			})
 		}()
