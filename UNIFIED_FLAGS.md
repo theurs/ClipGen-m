@@ -1,45 +1,52 @@
-﻿# Унификация флагов командной строки для LLM-утилит
+﻿# Unified CLI Flags for LLM Utilities
 
-## Описание
+[Read this in Russian | Читать на русском](UNIFIED_FLAGS_RU.md)
 
-Все LLM-утилиты (mistral, geminillm, ghllm, groqllm) были обновлены для поддержки унифицированного набора флагов командной строки.
+## Overview
 
-## Поддерживаемые флаги
+All LLM utilities within the ecosystem (`mistral`, `geminillm`, `ghllm`, `groqllm`) have been updated to support a standardized set of command-line flags. This ensures a consistent user experience regardless of which AI provider you are using.
 
-Все утилиты теперь поддерживают следующие унифицированные флаги с возможностью использования как одного, так и двух дефисов:
+## Supported Flags
 
-- `-f` / `--f` / `--file` - указание файлов для обработки (можно использовать несколько раз). Поддерживаемые типы файлов зависят от конкретной утилиты: изображения (все утилиты), текстовые файлы (все утилиты), аудио (полную поддержку обеспечивают mistral, ghllm и groqllm; geminillm поддерживает автоматическую конвертацию неподдерживаемых форматов с помощью ffmpeg), PDF (через OCR в mistral)
-- `-s` / `--s` / `--system` / `--system-prompt` - системный промпт (переопределяет конфиг)
-- `-j` / `--j` / `--json` - режим JSON-вывода
-- `-m` / `--m` / `--mode` - режим работы (auto, general, code, ocr, audio, vision)
-- `-t` / `--t` / `--temp` / `--temperature` - температура модели
-- `-v` / `--v` / `--verbose` - подробный вывод в stderr
-- `--save-key` - сохранение API-ключа и выход
-- `-chat` / `--chat` / `--chat-id` - идентификатор чата для сохранения истории
+All utilities now support the following unified flags. For flexibility, both single-hyphen (`-`) and double-hyphen (`--`) prefixes are accepted for every parameter:
 
-Примечание: Некоторые утилиты могут поддерживать дополнительные флаги, специфичные для конкретной реализации.
+- **`-f` / `--file`** – Specify files for processing. Multiple files can be attached by repeating the flag. Supported formats vary by utility:
+    - **Images & Text**: Supported by all utilities.
+    - **Audio**: Full support in `mistral`, `ghllm`, and `groqllm`. `geminillm` handles incompatible formats (like `.amr`) via automated `ffmpeg` conversion.
+    - **PDF**: Supported via native OCR in `mistral`.
+- **`-s` / `--system` / `--system-prompt`** – Set a custom system instruction (overrides the default configuration).
+- **`-j` / `--json`** – Force the model to output a valid JSON object.
+- **`-m` / `--mode`** – Set the operational mode (`auto`, `general`, `code`, `ocr`, `audio`, `vision`).
+- **`-t` / `--temp` / `--temperature`** – Adjust the model's sampling temperature.
+- **`-v` / `--verbose`** – Enable detailed execution logs in `stderr`.
+- **`--save-key`** – Securely save your API key to the config and exit.
+- **`-chat` / `--chat-id`** – Specify a unique session ID to persist and load chat history.
 
-## Примеры использования
+*Note: Individual utilities may still support additional flags specific to their unique features.*
+
+## Usage Examples
 
 ```bash
-# С одним дефисом
-mistral.exe -s "Ты ассистент" -t 0.7 -m general -j
+# Single-hyphen syntax
+mistral.exe -s "You are a professional editor" -t 0.7 -m general -j
 
-# С двумя дефисами
-ghllm.exe --system "Ты помощник" --temperature 0.8 --mode vision --json
+# Double-hyphen syntax
+ghllm.exe --system "Act as a software architect" --temperature 0.8 --mode code --json
 
-# Комбинированные флаги
-groqllm.exe -s "Анализируй данные" --temperature 0.5 -m code
+# Combined syntax
+groqllm.exe -s "Analyze the attached data" --temperature 0.5 -m general
 
-# Пример с geminillm
-geminillm.exe --system "Ты помощник" --temperature 0.7 --mode general
+# Multimodal example with geminillm
+geminillm.exe -f "chart.png" --system "Describe this image" --mode vision
 ```
 
-## Совместимость
+## Backward Compatibility
 
-Все утилиты сохраняют обратную совместимость с существующими флагами, добавляя поддержку новых унифицированных флагов.
+While the new standardized flags are recommended, all utilities maintain backward compatibility with their original flag sets to prevent breaking existing scripts and automation.
 
-## История чатов
+## Unified Chat History
 
-Все утилиты теперь поддерживают флаг `-chat` / `--chat` / `--chat-id` для сохранения истории чата в унифицированном формате, совместимом с Mistral.
+Every utility now supports the `-chat` / `--chat-id` flag. This uses a unified history format compatible with the original Mistral implementation, allowing you to switch between different AI providers while maintaining the same conversation thread.
 
+---
+**Part of the ClipGen-m Project**
