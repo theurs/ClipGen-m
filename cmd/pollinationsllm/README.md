@@ -1,148 +1,132 @@
 # Pollinations CLI
 
-Pollinations CLI - это мощный консольный интерфейс для взаимодействия с API Pollinations, с поддержкой расширенных инструментов, интеграции с Lua для выполнения сложных вычислений и веб-поиска через Tavily.
+[Read this in Russian | Читать на русском](README_RU.md)
 
-## Особенности
+Pollinations CLI is a robust command-line interface for the Pollinations API. It features advanced tool-calling capabilities, including a Lua-powered engine for complex scripting and mathematical operations, as well as real-time web search integration via Tavily.
 
-- **Инструменты**: Встроенная поддержка вызова инструментов для выполнения различных задач
-  - **Калькулятор**: Использование Lua для выполнения математических вычислений, алгоритмов и скриптов
-  - **Поиск**: Интеграция с Tavily API для выполнения веб-поиска с актуальной информацией
-  - **Поиск через Pollinations**: Использование модели gemini-search на Pollinations для поиска информации
-- **Режимы работы**: general, code, vision, audio, ocr
-- **Чат**: Поддержка диалогов с сохранением истории
-- **Файлы**: Поддержка работы с изображениями, аудио и текстовыми файлами
-- **Поддержка аудио**: Для лучшей совместимости с различными форматами аудио рекомендуется использовать установленный в системе ffmpeg для предварительной конвертации файлов в поддерживаемые форматы (MP3, WAV)
-- **Ротация ключей Tavily**: Случайное перемешивание ключей для равномерного распределения нагрузки
+## Key Features
 
-## Установка
+- **Autonomous Tool Calling**: Built-in support for dynamic tool execution to handle complex tasks:
+  - **Lua Scripting/Math**: Execute sophisticated mathematical formulas, algorithms, and logic via an isolated Lua environment.
+  - **Live Web Search**: Integrated Tavily API support for fetching up-to-date information from the web.
+  - **Pollinations Search**: Native integration with the `gemini-search` model for deep information retrieval.
+- **Versatile Workloads**: Dedicated modes for `general`, `code`, `vision`, `audio`, and `ocr`.
+- **Persistent Chat**: Stateful conversation support with local history management.
+- **Rich Media Support**: Seamlessly process images, audio, and text files.
+- **Smart Audio Processing**: Recommends system-wide `ffmpeg` for pre-converting audio to high-compatibility formats (MP3, WAV).
+- **API Key Load Balancing**: Supports multiple Tavily keys with randomized rotation to distribute API load effectively.
 
-1. Скачайте исполняемый файл `plnllm.exe`
-2. (Опционально) Установите API-ключи для использования (см. раздел "Ключи")
+## Installation
 
-## Использование
+1. Download the `plnllm.exe` binary.
+2. (Optional) Configure your API keys (see the "Key Management" section below).
 
-### Базовое использование
+## Usage
+
+### Basic Prompting
 
 ```bash
-# Простой запрос (инструменты включены по умолчанию)
-echo "Привет! Как дела?" | plnllm
+# Standard query (Tools are enabled by default)
+echo "Hey! How's it going?" | plnllm
 
-# Запрос с файлом
-plnllm -f файл.txt
+# Process a text file
+plnllm -f data.txt
 
-# Запрос с изображением
-plnllm -f фото.jpg
+# Process an image
+plnllm -f screenshot.jpg
 
-# Запрос с несколькими файлами
-plnllm -f файл1.txt -f изображение.jpg
+# Multi-file input
+plnllm -f notes.txt -f chart.png
 ```
 
-### Режимы работы
+### Operation Modes
 
 ```bash
-# Режим по умолчанию (general)
-echo "Объясни смысл жизни" | plnllm
+# General mode (Default)
+echo "Explain the butterfly effect" | plnllm
 
-# Режим кода
-echo "Объясни этот код" | plnllm -m code
+# Code mode
+echo "Explain this Python decorator" | plnllm -m code
 
-# Режим зрения (для изображений)
-plnllm -f image.jpg -m vision
+# Vision mode (Image analysis)
+plnllm -f photo.jpg -m vision
 
-# Режим аудио (для аудио файлов)
-plnllm -f audio.mp3 -m audio
+# Audio mode (Transcriptions and analysis)
+plnllm -f memo.mp3 -m audio
 
-# Режим OCR (для PDF/изображений с текстом)
+# OCR mode (Text extraction from PDFs or images)
 plnllm -f document.pdf -m ocr
 ```
 
-### Параметры командной строки
+### Command-Line Arguments
 
-- `-f файл`: Добавить файл к запросу (можно использовать несколько раз)
-- `-s "системный промпт"`: Задать свой системный промпт (заменяет конфигурационный)
-- `-j`: Форсировать JSON вывод
-- `-m режим`: Режим работы (auto, general, code, ocr, audio, vision)
-- `-t температура`: Температура генерации (0.0-2.0, заменяет конфигурационную)
-- `-v`: Включить verbose логирование в stderr
-- `-save-key ВАШ_КЛЮЧ`: Сохранить Pollinations API ключ и выйти
-- `-add-tavily-key ВАШ_КЛЮЧ`: Сохранить Tavily API ключ и выйти
-- `-chat ID`: ID чата для контекста (включает режим чата)
-- `-clear-chat ID`: Очистить историю указанного чата
-- `-no-tools`: Отключить режим вызова инструментов (инструменты включены по умолчанию)
+- `-f <file>`: Attach a file (can be used multiple times).
+- `-s "prompt"`: Override the default system prompt.
+- `-j`: Force JSON output format.
+- `-m <mode>`: Operation mode (`auto`, `general`, `code`, `ocr`, `audio`, `vision`).
+- `-t <value>`: Set temperature (0.0 - 2.0).
+- `-v`: Enable verbose logging to `stderr`.
+- `-save-key <KEY>`: Save your Pollinations API key and exit.
+- `-add-tavily-key <KEY>`: Append a Tavily API key and exit.
+- `-chat <ID>`: Specify a Chat ID to maintain conversation context.
+- `-clear-chat <ID>`: Wipe history for a specific chat session.
+- `-no-tools`: Disable the autonomous tool-calling engine.
 
-### Примеры использования инструментов
+### Using Built-in Tools
 
-Pollinations автоматически решает, когда использовать инструменты, основываясь на запросе пользователя:
-
-```bash
-# Калькулятор: Математические вычисления
-echo "Чему равно 25 * 36 + 17 * 42?" | plnllm
-
-# Калькулятор: Алгоритмы Lua
-echo "Вычисли факториал 15" | plnllm
-
-# Калькулятор: Программы на Lua
-echo "Напиши Lua-скрипт, который сортирует массив [5, 2, 8, 1, 9]" | plnllm
-
-# Поиск: Веб-поиск через Tavily
-echo "Какие последние новости о языке программирования Go?" | plnllm
-
-# Поиск: Рыночные данные
-echo "Какова цена акций Apple сегодня?" | plnllm
-
-# Поиск: Через модель gemini-search на Pollinations
-echo "Найди актуальную информацию о состоянии API Pollinations" | plnllm
-
-# Смешанные запросы
-echo "Найди курс доллара и вычисли, сколько будет 100 долларов в рублях" | plnllm
-```
-
-### Режим чата
+The CLI automatically determines when to trigger tools based on your request:
 
 ```bash
-# Начать новый чат
-echo "Привет, как дела?" | plnllm -chat мой_чат
+# Scripting: Mathematical operations
+echo "What is 25 * 36 + 17 * 42?" | plnllm
 
-# Продолжить чат (история сохраняется)
-echo "А что ты умеешь?" | plnllm -chat мой_чат
+# Scripting: Algorithmic tasks
+echo "Calculate the factorial of 15 using Lua" | plnllm
 
-# Задать вопрос с контекстом из истории
-echo "Напомни, о чем мы говорили?" | plnllm -chat мой_чат
+# Web Search: Current events
+echo "What are the latest updates on the Go programming language?" | plnllm
 
-# Очистить историю чата
-plnllm -clear-chat мой_чат
+# Web Search: Market data
+echo "What is the current stock price for Apple?" | plnllm
 
-# Очистить чат командой в сообщении
-echo "/clear" | plnllm -chat мой_чат
+# Hybrid Query: Search + Math
+echo "Find the current exchange rate for BTC to USD and calculate the value of 0.5 BTC" | plnllm
 ```
 
-### JSON формат
+### Chat Mode
 
 ```bash
-# Форсировать JSON вывод
-echo "Создай JSON с информацией о пользователе" | plnllm -j
+# Start a new conversation
+echo "Let's talk about space" | plnllm -chat space_convo
+
+# Continue the conversation (Context is preserved)
+echo "How far is Mars from Earth?" | plnllm -chat space_convo
+
+# Reset a chat session
+plnllm -clear-chat space_convo
+
+# Reset chat via inline command
+echo "/clear" | plnllm -chat space_convo
 ```
 
-## Конфигурация
+## Configuration
 
-### Пути к файлам
+### File Paths
 
-- **Конфигурационный файл**: `%APPDATA%\clipgen-m\pollinations.conf`
-- **Конфигурация Tavily**: `%APPDATA%\clipgen-m\tavily.conf`
-- **История чатов**: `%APPDATA%\clipgen-m\mistral_chats\`
-- **Логи ошибок**: `%APPDATA%\clipgen-m\pollinations_err.log`
+- **Main Config**: `%APPDATA%\clipgen-m\pollinations.conf`
+- **Tavily Config**: `%APPDATA%\clipgen-m\tavily.conf`
+- **Chat History**: `%APPDATA%\clipgen-m\mistral_chats\`
+- **Error Logs**: `%APPDATA%\clipgen-m\pollinations_err.log`
 
-### Формат конфигурационного файла
+### `pollinations.conf` Format
 
-Файл `pollinations.conf` в формате JSON:
+The configuration uses a standard JSON format:
 
 ```json
 {
-  "api_keys": [
-    "ваш_pollinations_api_ключ"
-  ],
+  "api_keys": ["your_pollinations_api_key"],
   "base_url": "https://gen.pollinations.ai/v1",
-  "system_prompt": "Вы — ИИ-ассистент, интегрированный в инструмент ClipGen-m. Ваш вывод часто копируется в буфер обмена. Будьте лаконичны. Если это лог ошибки — объясните причину. Не используйте вводные фразы типа 'Вот ваш текст'. Пиши простой текст без маркдауна.",
+  "system_prompt": "You are an AI assistant integrated into ClipGen-m. Be concise. No conversational filler. Return plain text without markdown.",
   "temperature": 0.7,
   "max_tokens": 8000,
   "models": {
@@ -153,97 +137,54 @@ echo "Создай JSON с информацией о пользователе" |
     "ocr": ["gemini"]
   },
   "chat_history_max_messages": 30,
-  "chat_history_max_chars": 50000,
-  "image_char_cost": 2000
+  "chat_history_max_chars": 50000
 }
 ```
 
-### Формат конфигурации Tavily
+## Key Management
 
-Файл `tavily.conf` в формате JSON:
-
-```json
-{
-  "api_keys": [
-    "ваш_первый_tavily_api_ключ",
-    "ваш_второй_tavily_api_ключ",
-    "ваш_третий_tavily_api_ключ"
-  ]
-}
-```
-
-## Управление ключами
-
-### Добавление ключей
+### Managing API Keys
 
 ```bash
-# Добавить Pollinations API ключ
-plnllm -save-key ваш_pollinations_api_ключ
+# Save your primary Pollinations API key
+plnllm -save-key YOUR_KEY_HERE
 
-# Добавить Tavily API ключ (для инструмента поиска)
-plnllm -add-tavily-key tvly-abcdefghijklmnopqrstuvwxyz1234567890
+# Add a Tavily API key (used for web search)
+plnllm -add-tavily-key tvly-abcdefghijklmnopqrstuvwxyz
 ```
 
-### Множественные ключи
+You can add multiple Tavily keys; the application will rotate through them randomly to optimize rate limits.
 
-Pollinations поддерживает использование нескольких ключей:
-- Для Tavily API: случайное перемешивание ключей для равномерного распределения нагрузки
+## Tool Engine Details
 
-## Логирование
+### Lua Scripting Engine
+- Provides high-precision mathematical execution.
+- Supports standard Lua libraries for complex data manipulation.
+- Runs in a secure, isolated environment.
 
-- **Подробный режим**: Используйте флаг `-v` для подробного логирования в stderr
-- **Файл логов ошибок**: `%APPDATA%\clipgen-m\pollinations_err.log`
-- **Ротация логов**: Файл логов ротируется при достижении 10MB
+### Web Search (Tavily & Pollinations)
+- Performs real-time web crawling.
+- Returns concise summaries and top-ranked results.
+- Uses a two-stage fallback system: attempts `gemini-search` on Pollinations first, then utilizes Tavily for broader coverage.
 
-## Система вызова инструментов
+## Troubleshooting
 
-Pollinations использует встроенную систему вызова инструментов:
+1. **"No input provided"**: Ensure you are piping data via `stdin` or using the `-f` flag.
+2. **"No API keys"**: You must configure at least one key via `-add-tavily-key`.
+3. **Lua Errors**: Ensure the `lua-executor` binary is in the correct path or integrated into the main binary.
+4. **Rate Limiting**: If you encounter 429 errors, consider adding more Tavily keys for better rotation.
 
-### Калькулятор (Lua)
+## Development
 
-- Выполняет математические вычисления с высокой точностью
-- Поддерживает все функции Lua и стандартные библиотеки
-- Может выполнять сложные алгоритмы и скрипты
-- Безопасное выполнение в изолированной среде
-
-### Поиск (Tavily и Pollinations Search)
-
-- Выполняет веб-поиск с актуальной информацией
-- Возвращает краткие выжимки и топ результатов
-- Поддерживает несколько API-ключей с ротацией
-- Ограничивает размер контента для предотвращения перегрузки контекста
-- Использует двухэтапный поиск: сначала через модель gemini-search на Pollinations, затем резервный вариант через Tavily
-
-## Совместимость
-
-- **ОС**: Windows
-
-## Устранение неполадок
-
-1. **"Нет входных данных"**: Убедитесь, что вы передаете что-то в stdin или используете файлы
-2. **"Нет API ключей"**: Добавьте хотя бы один ключ с помощью `plnllm -add-tavily-key ВАШ_КЛЮЧ`
-3. **Ошибки с инструментами**: Проверьте, установлены ли соответствующие конфигурации
-4. **Проблемы с Lua**: Убедитесь, что исполняемый файл `lua-executor` доступен
-5. **Проблемы с Tavily**: Убедитесь, что файл `tavily.conf` правильно настроен
-
-## Разработка
-
-Проект написан на Go и может быть скомпилирован с помощью:
+Built with Go. To compile from source:
 
 ```bash
 go build -o plnllm.exe main.go
 ```
 
-### Архитектура
+## License
 
-- **main.go**: Основная логика приложения
-- **lua-executor**: Подсистема выполнения Lua-скриптов (внешняя зависимость)
-- **Tavily интеграция**: Подсистема поиска через Tavily
+This project is licensed under the MIT License.
 
-## Лицензия
-
-Этот проект распространяется по лицензии MIT.
-
-## Авторы
-
-ClipGen-m проект
+---
+**Part of the ClipGen-m Project**

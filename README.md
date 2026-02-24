@@ -1,288 +1,208 @@
-# ClipGen-M - менеджер  буфера обмена с ИИ
+# ClipGen-M — AI-Powered Clipboard Manager
+
+[Read this in Russian | Читать на русском](README_RU.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows-blue)]()
 
-## Описание
+## Overview
 
-ClipGen-M - это набор утилит для взаимодействия с различными LLM (Large Language Models), включая Mistral, Google Gemini, GitHub Copilot, Groq, Pollination AI. Проект предоставляет унифицированный интерфейс командной строки для работы с различными моделями искусственного интеллекта.
+ClipGen-M is a powerful suite of utilities designed to interface with various Large Language Models (LLMs), including Mistral, Google Gemini, GitHub Copilot, Groq, and Pollinations AI. This project provides a unified command-line interface and a system-tray background service to bring AI capabilities directly to your Windows workflow.
 
-## Особенности
+## Key Features
 
-- **Унифицированный интерфейс**: Все утилиты используют одинаковые флаги командной строки
-- **Поддержка мультимедиа**: Работа с изображениями, аудио, PDF и текстовыми файлами
-- **Поддержка чатов**: Сохранение истории чатов и контекста
-- **Автоматическая конвертация аудио**: Поддержка редких форматов (AMR и др.) через ffmpeg
-- **Графический интерфейс**: Встроенный ChatUI для удобной работы
-- **Системный трей**: Управление через иконку в трее Windows
-- **Интеграция с буфером обмена**: Автоматическая обработка данных из буфера обмена с помощью ИИ
-- **Горячие клавиши**: Поддержка настраиваемых хоткеев для быстрого доступа к функциям
-- **Работа с выделенным текстом**: Возможность обработки выделенного текста без копирования
+- **Unified Interface**: All utilities share a consistent set of command-line flags for a seamless experience.
+- **Multimedia Support**: Works out of the box with images, audio, PDFs, and plain text.
+- **Stateful Chats**: Built-in support for chat history and context retention.
+- **Automated Audio Conversion**: Seamlessly handles rare formats (like AMR) via ffmpeg integration.
+- **ChatUI**: A dedicated graphical interface for a more interactive chat experience.
+- **System Tray Integration**: Runs quietly in the background with a Windows system tray icon for quick access.
+- **AI-Enhanced Clipboard**: Automatically processes clipboard data using your preferred LLM.
+- **Customizable Hotkeys**: Boost productivity with global hotkeys tailored to your workflow.
+- **Direct Text Processing**: Process selected text on-the-fly without the need to manually copy it first.
 
+## Project Structure
 
-## Структура проекта
+- `cmd/clipgen-m` – The main background application (System Tray).
+- `cmd/chatui` – The graphical user interface for interactive AI chatting.
+- `cmd/geminillm` – CLI utility for Google Gemini.
+- `cmd/ghllm` – CLI utility for GitHub Copilot.
+- `cmd/groqllm` – CLI utility for Groq.
+- `cmd/pollinationsllm` – CLI utility for Pollinations AI.
+- `cmd/mistral` – CLI utility for Mistral (the original implementation).
 
-- `cmd/clipgen-m` - основное приложение с системным треем
-- `cmd/chatui` - графический интерфейс для чатов
-- `cmd/geminillm` - утилита для Google Gemini
-- `cmd/ghllm` - утилита для GitHub Copilot
-- `cmd/groqllm` - утилита для Groq
-- `cmd/pollinationsllm` - утилита для Pollinations AI
-- `cmd/mistral` - утилита для Mistral (оригинальная)
+## Main Module: ClipGen-m (Clipboard Manager)
 
-## Основной модуль ClipGen-m (буфер обмена)
+The core `clipgen-m` module is a Windows background service that lives in your system tray. It transforms your clipboard into an intelligent tool, allowing you to pass data to various LLMs instantly.
 
-Основной модуль `clipgen-m` представляет собой приложение, которое работает в системном трее Windows и предоставляет мощные функции для работы с буфером обмена. Он позволяет автоматически обрабатывать данные из буфера обмена с помощью различных LLM-моделей.
+### Core Capabilities:
 
-### Основные функции:
+- **Clipboard Processing**: Automatically handle text, images, and files directly from your clipboard.
+- **Rich Data Support**: Handles raw text, image files, generic file attachments, and file paths.
+- **Selection Processing**: Process text currently selected in any application without overriding your clipboard.
+- **Clipboard OCR**: Extract text from images currently stored in the clipboard.
+- **Layout Switcher**: A "Punto Switcher" style feature to quickly fix text typed in the wrong keyboard layout (e.g., Russian vs. English).
+- **Multi-LLM Integration**: Switch between Mistral, Gemini, Copilot, Groq, and Pollinations AI on the fly.
 
-- **Обработка буфера обмена**: Автоматическая обработка текста, изображений и файлов из буфера обмена
-- **Поддержка различных типов данных**: Текст, изображения, файлы и пути к файлам
-- **Работа с выделенным текстом**: Возможность обработки выделенного текста без его копирования в буфер
-- **OCR-функции**: Извлечение текста с изображений через буфер обмена
-- **Переключение раскладки**: Функция "Punto Switcher" для быстрого переключения между русской и английской раскладками
-- **Интеграция с различными LLM**: Поддержка Mistral, Google Gemini, GitHub Copilot, Groq и Pollinations AI
+### Supported Formats:
 
-### Поддерживаемые форматы данных:
+- **Text**: Any clipboard content or active text selection.
+- **Images**: PNG, JPG, JPEG, BMP, WEBP, and more.
+- **Files**: Directly processes files copied to the clipboard.
+- **File Paths**: Automatically resolves and processes files from paths copied as text.
 
-- **Текст**: Любой текст из буфера обмена или выделенный текст
-- **Изображения**: PNG, JPG, JPEG, BMP, WEBP и другие форматы
-- **Файлы**: Прямая обработка файлов, помещенных в буфер обмена
-- **Пути к файлам**: Обработка файлов по указанным в буфере путям
+## Unified Command-Line Flags
 
-## Унифицированные флаги командной строки
+All LLM utilities support a standardized set of flags (using either `-` or `--` prefixes):
 
-Все LLM-утилиты поддерживают унифицированный набор флагов с поддержкой как одинарных (-), так и двойных (--) дефисов:
+- `-f` / `--file` – Attach files (Images, Audio, PDF, or Text).
+- `-s` / `--system` / `--system-prompt` – Set the system instruction.
+- `-j` / `--json` – Enable JSON output mode.
+- `-m` / `--mode` – Model operation mode (`auto`, `general`, `code`, `ocr`, `audio`, `vision`).
+- `-t` / `--temp` / `--temperature` – Adjust model creativity/randomness.
+- `-v` / `--verbose` – Enable detailed logging output.
+- `--save-key` – Securely save your API key.
+- `-chat` / `--chat-id` – Specify a unique chat session ID.
 
-- `-f` / `--f` / `--file` - файлы (поддерживаются изображения, аудио и текстовые файлы)
-- `-s` / `--s` / `--system` / `--system-prompt` - системный промпт
-- `-j` / `--j` / `--json` - JSON режим
-- `-m` / `--m` / `--mode` - режим модели (auto, general, code, ocr, audio, vision)
-- `-t` / `--t` / `--temp` / `--temperature` - температура
-- `-v` / `--v` / `--verbose` - подробный вывод
-- `--save-key` - сохранение ключа
-- `-chat` / `--chat` / `--chat-id` - ID чата
+## Chat Functionality
 
-## Чат-функциональность
+ClipGen-m provides a robust chat experience through the integrated **ChatUI** and centralized chat management system.
 
-ClipGen-m предоставляет мощную чат-функциональность через встроенный графический интерфейс ChatUI и систему управления чатами.
+### Chat Features:
 
-### Основные возможности чата:
+- **Graphical Interface**: A clean UI with markdown support and message history.
+- **Session Management**: Create, save, and switch between multiple chat sessions.
+- **File Attachments**: Drop files and images directly into your conversation.
+- **Provider Switching**: Toggle between Mistral, Gemini, GitHub Copilot, and Groq within the same interface.
+- **Fine-grained Control**: Set specific temperatures and system prompts per chat.
+- **Context Persistence**: Full message history is preserved to maintain conversation flow.
 
-- **Графический интерфейс**: Удобное окно чата с поддержкой форматирования и истории
-- **Управление чатами**: Создание, сохранение и переключение между различными чатами
-- **Поддержка файлов**: Возможность прикрепления файлов и изображений к сообщениям
-- **Несколько провайдеров**: Поддержка различных LLM-провайдеров (Mistral, Gemini, GitHub Copilot, Groq)
-- **Настройка параметров**: Возможность настройки температуры, системного промпта и режимов для каждого чата
-- **История сообщений**: Сохранение полной истории переписки с контекстом
+### Quick Access:
 
-### Быстрый доступ к чату:
+- **Hotkey**: Press `Ctrl+M` (default) to toggle the chat window instantly.
+- **Clipboard Integration**: Send your current clipboard content straight into the chat with one click.
 
-- **Горячая клавиша**: По умолчанию `Ctrl+M` для быстрого открытия/закрытия окна чата
-- **Интеграция с буфером**: Возможность отправки содержимого буфера обмена напрямую в чат
+## Hotkeys and Actions
 
-### Поддерживаемые провайдеры:
+ClipGen-m uses customizable global hotkeys to trigger AI actions. The following defaults are included:
 
-- **Mistral**: По умолчанию, поддержка различных моделей Mistral
-- **Google Gemini**: Интеграция с Google Gemini API
-- **GitHub Copilot/Chat**: Использование GitHub Copilot и связанных моделей
-- **Groq**: Поддержка моделей от Groq
-- **Pollinations AI**: Интеграция с API Pollinations
+### Standard Actions:
 
-## Горячие клавиши и действия
+- **Fix Layout (Punto)**: `Pause` – Toggle text between RU and EN layouts.
+- **Fix Text**: `Ctrl+F1` – Grammar, punctuation, and style correction.
+- **Process Request**: `Ctrl+F2` – Run a custom AI command on the selected text.
+- **Translate & View**: `Ctrl+F3` – Translate text and open the result in an editor.
+- **Translate & Replace**: `Ctrl+F4` – Translate text and replace the selection in-place.
+- **OCR (Image to Text)**: `Ctrl+F6` – Extract text from a copied image.
+- **Smart Analysis**: `Ctrl+F8` – Interactive mode for complex commands over text.
 
-ClipGen-m поддерживает настраиваемые горячие клавиши для быстрого доступа к различным функциям. По умолчанию включены следующие действия:
+### App Management:
 
-### Стандартные действия:
+- **Toggle Service**: `Ctrl+F12` – Enable or disable global hotkey processing.
+- **Open Chat**: `Ctrl+M` – Show or hide the ChatUI window.
 
-- **Сменить раскладку (Punto)**: `Pause` - переключение между русской и английской раскладками
-- **Исправить текст**: `Ctrl+F1` - грамматическая и стилистическая проверка текста
-- **Выполнить просьбу**: `Ctrl+F2` - выполнение произвольной команды над текстом
-- **Перевести и показать**: `Ctrl+F3` - перевод текста с открытием в редакторе
-- **Перевести и заменить**: `Ctrl+F4` - перевод текста с заменой в текущем месте
-- **OCR / Текст с картинки**: `Ctrl+F6` - извлечение текста с изображений
-- **Умный анализ**: `Ctrl+F8` - выполнение произвольной команды над текстом (интерактивная версия)
+### Customization:
 
-### Управление приложением:
+Hotkeys are defined in `config.yaml` under the `actions` section. Each action supports:
+- `name`: Identifier for the menu.
+- `hotkey`: Key combination.
+- `prompt`: The system prompt sent to the LLM.
+- `input_type`: Data type (`auto`, `text`, `image`, `files`, `layout_switch`).
+- `output_mode`: Handling of the result (`replace` the text or open in `editor`).
 
-- **Переключение состояния**: `Ctrl+F12` - включение/выключение обработки горячих клавиш
-- **Открытие чата**: `Ctrl+M` - быстрое открытие/закрытие окна чата
+## Interface and System Tray
 
-### Настройка горячих клавиш:
+The application runs as a lightweight process in the Windows System Tray, ensuring AI tools are always just a click away.
 
-Горячие клавиши настраиваются в файле `config.yaml` в разделе `actions`. Каждое действие может иметь:
-- `name` - название действия
-- `hotkey` - комбинация клавиш
-- `prompt` - системный промпт для LLM
-- `input_type` - тип входных данных (auto, text, image, files, layout_switch)
-- `output_mode` - режим вывода (replace, editor)
+### UI Elements:
 
-## Системный трей и интерфейс
+- **Tray Icon**: Indicates the current application state.
+- **Context Menu**: Right-click for quick access to settings and logs.
+- **Status Indicators**:
+  - **Green**: Active and listening for hotkeys.
+  - **Yellow**: Processing an AI request.
+  - **Red**: Currently disabled.
 
-ClipGen-m работает как приложение в системном трее Windows, обеспечивая постоянную доступность функций без необходимости держать окно открытым.
+### Tray Menu Functions:
 
-### Основные элементы интерфейса:
+- **Status Toggle**: "Active" checkbox to pause/resume global hotkeys.
+- **Configuration Access**: Quick links to edit all YAML and config files.
+- **Log Viewer**: Instant access to error logs for debugging.
+- **App Control**: Restart or Exit the application.
 
-- **Иконка в трее**: Отображает текущее состояние приложения (активно/неактивно)
-- **Контекстное меню**: Доступ к основным функциям через правый клик по иконке
-- **Индикаторы состояния**:
-  - **Зеленая иконка**: Приложение активно и обрабатывает горячие клавиши
-  - **Желтая иконка**: Выполняется обработка запроса
-  - **Красная иконка**: Приложение отключено
+## Configuration
 
-### Функции системного трея:
+Settings are stored in a YAML file located at `%APPDATA%\clipgen-m\config.yaml`. This file is automatically generated on the first run.
 
-- **Переключение состояния**: Чекбокс "Активен" для включения/выключения обработки горячих клавиш
-- **Доступ к конфигурации**: Прямое редактирование всех конфигурационных файлов
-- **Доступ к логам**: Просмотр файлов логов для диагностики проблем
-- **Управление приложением**: Перезагрузка и выход из приложения
-
-### Контекстное меню:
-
-Через контекстное меню доступны следующие функции:
-- Включение/выключение обработки клавиш
-- Редактирование конфигурационных файлов
-- Просмотр файлов логов
-- Перезагрузка приложения
-- Завершение работы
-
-## Быстрый доступ к конфигам и логам
-
-В контекстное меню ClipGen-m добавлены пункты для быстрого доступа:
-
-### Конфигурационные файлы:
-- `Настройки (main)` - редактировать config.yaml
-- `Mistral Config` - редактировать mistral.conf
-- `Tavily Config` - редактировать tavily.conf
-- `Geminillm Config` - редактировать gemini.conf
-- `Ghllm Config` - редактировать github.conf
-- `Groqllm Config` - редактировать groq.conf
-- `Pollinations Config` - редактировать pollinations.conf
-
-### Файлы логов:
-- `Mistral Log` - просмотр mistral_err.log
-- `Geminillm Log` - просмотр gemini_err.log
-- `Ghllm Log` - просмотр github_err.log
-- `Groqllm Log` - просмотр groq_err.log
-- `ClipGen Log` - просмотр ошибок программы
-- `Pollinations Log` - просмотр pollinations_err.log
-
-## Конфигурация
-
-ClipGen-m использует YAML-файл конфигурации `config.yaml`, который автоматически создается при первом запуске в директории `%APPDATA%\clipgen-m\`.
-
-### Структура config.yaml:
+### Sample `config.yaml` Structure:
 
 ```yaml
-# --- СИСТЕМНЫЕ НАСТРОЙКИ ---
-editor_path: "notepad.exe"                    # Путь к редактору для открытия файлов
-llm_path: "mistral.exe"                      # Путь к основной LLM-утилите
-app_toggle_hotkey: "Ctrl+F12"                # Горячая клавиша для включения/выключения приложения
-chatui_path: ".\\ClipGen-m-chatui.exe"       # Путь к исполняемому файлу ChatUI
-chatui_hotkey: "Ctrl+M"                      # Горячая клавиша для открытия чата
-system_prompt: |                             # Системный промпт по умолчанию
-  Вы работаете в Windows-утилите ClipGen-m, которая помогает отправлять запросы к ИИ-моделям через буфер обмена.
-  Используйте табуляцию для разделения столбцов в таблицах, это необходимо для возможности вставки текста в Excel.
-  Не добавляйте вступительные заполнители. Используй простой текст без маркдауна.
+# --- SYSTEM SETTINGS ---
+editor_path: "notepad.exe"                    # Editor for output
+llm_path: "mistral.exe"                      # Default LLM utility
+app_toggle_hotkey: "Ctrl+F12"                # Toggle app on/off
+chatui_path: ".\\ClipGen-m-chatui.exe"       # Path to ChatUI binary
+chatui_hotkey: "Ctrl+M"                      # Toggle chat window
+system_prompt: |                             # Default instructions
+  You are ClipGen-m, a Windows AI utility. 
+  Use tabs for table columns (Excel-friendly). 
+  Provide direct answers without conversational filler.
 
-actions:                                      # Список пользовательских действий
-  - name: "Сменить раскладку (Punto)"        # Название действия
-    hotkey: "Pause"                          # Горячая клавиша
-    input_type: "layout_switch"              # Тип обработки (layout_switch)
-    output_mode: "replace"                   # Режим вывода (replace, editor)
-  - name: "Исправить текст (F1)"
+actions:                                      
+  - name: "Fix Layout (Punto)"
+    hotkey: "Pause"
+    input_type: "layout_switch"
+    output_mode: "replace"
+  - name: "Fix Grammar (F1)"
     hotkey: "Ctrl+F1"
-    prompt: |
-      Исправь грамматику, пунктуацию и стиль. Не надо переводить на другой язык. Верни ТОЛЬКО исправленный текст.
-      Текст: {{.clipboard}}
+    prompt: "Fix grammar and style. Return ONLY the corrected text: {{.clipboard}}"
     input_type: "text"
     output_mode: "replace"
-  - name: "Выполнить просьбу (F2)"
-    hotkey: "Ctrl+F2"
-    prompt: "Выполни просьбу:\n{{.clipboard}}"
-    input_type: "text"
-    output_mode: "replace"
-  # ... другие действия
 ```
 
-### Типы input_type:
+## Installation and Building
 
-- `auto` - автоматическое определение типа данных (текст, изображение, файлы)
-- `text` - обработка текста из буфера или выделения
-- `image` - обработка изображений
-- `files` - обработка файлов из буфера
-- `layout_switch` - переключение раскладки клавиатуры
+Each utility includes a `build.bat` file for easy compilation:
 
-### Режимы output_mode:
-
-- `replace` - замена текущего содержимого (вставка результата с Ctrl+V)
-- `editor` - открытие результата в редакторе
-- `notepad` - синоним для editor
-
-### Специальные переменные в промптах:
-
-- `{{.clipboard}}` - содержимое буфера обмена
-- `{{ask_user}}` - запрос дополнительной информации у пользователя во время выполнения
-
-## Сборка
-
-Каждая утилита имеет собственный `build.bat` файл для простой сборки:
-
-- `mistral/build.bat`
-- `geminillm/build.bat`
-- `ghllm/build.bat`
-- `groqllm/build.bat`
-- `clipgen-m/build.bat`
-- `chatui/build.bat`
-
-Для сборки выполните:
-```
-cd cmd\[утилита]
+To build a specific module:
+```cmd
+cd cmd\[utility_name]
 call build.bat
 ```
 
-## Использование
+## Usage Examples
 
-Все утилиты принимают входные данные через stdin и поддерживают работу с файлами, изображениями и аудио (в зависимости от модели и API возможностей).
+Utilities accept input via `stdin` and support various data types depending on the specific model's API.
 
-Поддержка файлов:
-- `mistral.exe` - поддерживает изображения, аудио, текстовые файлы, PDF (через OCR)
-- `geminillm.exe` - поддерживает изображения, текстовые файлы, аудио (включая автоматическую конвертацию неподдерживаемых форматов с помощью ffmpeg)
-- `ghllm.exe` - поддерживает изображения, текстовые файлы, аудио
-- `groqllm.exe` - поддерживает изображения, аудио, текстовые файлы
-- `plnllm.exe` - поддерживает изображения, аудио, текстовые файлы, PDF (через OCR), с поддержкой инструментов (калькулятор Lua, поиск)
+- `mistral.exe`: Supports images, audio, text, and PDF (via OCR).
+- `geminillm.exe`: Supports images, text, and audio (includes automatic ffmpeg conversion).
+- `ghllm.exe`: Supports images, text, and audio.
+- `plnllm.exe`: Supports images, audio, text, and PDF; includes tool support (Lua calculator, web search).
 
-Примеры:
-```
-echo "Привет" | mistral.exe --system "Ты помощник" --temperature 0.7
-echo "Привет" | geminillm.exe --system "Ты помощник" --temperature 0.7
-echo "Привет" | ghllm.exe --mode general --json
-echo "Привет" | groqllm.exe --chat mychat --temperature 0.5
+**CLI Examples:**
+```cmd
+echo "Summarize this" | mistral.exe --system "Professional assistant" --temperature 0.3
+echo "Translate to French" | geminillm.exe --mode general
+echo "Make it JSON" | ghllm.exe --mode general --json
 ```
 
-## Расположение файлов
+## File Locations
 
-Конфигурационные файлы и логи хранятся в:
-`%APPDATA%\clipgen-m\`
+- **Configs & Logs**: `%APPDATA%\clipgen-m\`
 
-## Требования
+## Requirements
 
 - Windows 10/11
 - Go 1.25+
-- (Опционально) FFmpeg для поддержки редких аудио форматов
+- (Optional) FFmpeg for advanced audio format support.
 
-## Вклад в проект
+## Contributing
 
-См. [CONTRIBUTING.md](CONTRIBUTING.md) для подробной информации о том, как внести свой вклад в проект.
+Please refer to [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to get involved.
 
-## Кодекс поведения
+## License
 
-См. [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) для ознакомления с нашими правилами поведения.
+This project is licensed under the [MIT License](LICENSE).
 
-## Лицензия
-
-Этот проект лицензирован под [MIT License](LICENSE). См. файл [LICENSE](LICENSE) для получения дополнительной информации.
-
-## Авторы
-
-См. [AUTHORS](AUTHORS) для списка участников проекта.
+---
+**Authors**: See [AUTHORS](AUTHORS) for the full list of contributors.

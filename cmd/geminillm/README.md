@@ -1,91 +1,97 @@
 # Gemini CLI Utility (geminillm)
 
-Мощная и гибкая консольная утилита для взаимодействия с моделями **Google Gemini** и **Gemma 3** через Google AI API. Программа полностью интегрирована в экосистему **ClipGen-m** и является прямой альтернативой (Drop-in replacement) для Mistral CLI.
+[Read this in Russian | Читать на русском](README_RU.md)
 
-## ✨ Возможности
+A robust and flexible command-line interface for interacting with **Google Gemini** and **Gemma 3** models via the Google AI API. Fully integrated into the **ClipGen-m** ecosystem, this utility serves as a drop-in replacement for the Mistral CLI, allowing for a seamless transition between AI providers.
 
-*   **Мультимодальность**: Поддержка текста, изображений, аудио и **PDF (нативный OCR)**. **Важно**: Поддержка аудио может быть ограничена для некоторых форматов из-за ограничений Google Gemini API. Утилита автоматически конвертирует неподдерживаемые форматы (например, .amr) в поддерживаемые с помощью ffmpeg.
-*   **Двойные инструменты (Gemini)**: Одновременное использование встроенного **Google Search** (поиск актуальной информации) и **Code Execution** (выполнение кода в песочнице для точных математических расчетов).
-*   **Поддержка Gemma 3**: Автоматическая эмуляция системных промптов для моделей Gemma, которые официально их не поддерживают через API `generateContent`.
-*   **Совместимость с Mistral**: Использует ту же структуру истории чатов (`mistral_chats`), что позволяет переключаться между Mistral и Gemini без потери контекста диалога.
-*   **Ротация ключей**: Автоматическое случайное перемешивание списка API-ключей при каждом запуске для равномерного распределения нагрузки (износа) лимитов.
-*   **Windows-ориентированность**: Корректная обработка кодировок (CP866/UTF-8) при работе через пайпы (pipes) в CMD/PowerShell.
+## ✨ Features
 
-## 🛠 Сборка
+*   **Native Multimodality**: Out-of-the-box support for text, images, audio, and **PDFs (with native OCR)**. 
+    *   *Note*: Some audio formats may have limited support in the Gemini API. The utility automatically detects unsupported formats (like `.amr`) and converts them to high-compatibility formats via `ffmpeg` before uploading.
+*   **Dual-Tool Integration (Gemini)**: Leverages the power of **Google Search** (for real-time information) and **Code Execution** (running Python in a secure sandbox for high-precision mathematical and logical tasks) simultaneously.
+*   **Gemma 3 Support**: Includes automated system prompt emulation for Gemma models, which do not natively support system instructions via the standard `generateContent` API.
+*   **Mistral-Compatible Chat History**: Uses the same unified storage structure (`mistral_chats`) as the Mistral CLI. This allows you to switch between Mistral and Gemini mid-conversation without losing your chat context.
+*   **Smart Key Rotation**: Automatically shuffles your list of API keys on every launch to balance quota usage and avoid rate limits.
+*   **Windows-Optimized**: Specifically handles console encodings (CP866 to UTF-8) to ensure smooth piped input/output in CMD and PowerShell.
 
-Для сборки требуется [Go 1.23+](https://go.dev/dl/).
+## 🛠 Build Instructions
+
+Requires [Go 1.23+](https://go.dev/dl/).
 
 ```bash
-# Перейдите в папку проекта
+# Navigate to the project directory
 cd cmd/geminillm
 
-# Соберите исполняемый файл
+# Compile the binary
 go build -o geminillm.exe main.go
 ```
 
-## ⚙️ Настройка
+## ⚙️ Configuration
 
-Утилита хранит настройки в файле `%AppData%\clipgen-m\gemini.conf`.
+Settings are stored in `%AppData%\clipgen-m\gemini.conf`.
 
-**Добавить API ключ:**
-Получите бесплатный ключ в [Google AI Studio](https://aistudio.google.com/).
+**Add an API Key:**
+Generate your free API key at [Google AI Studio](https://aistudio.google.com/).
 ```powershell
-geminillm.exe -save-key AIzaSy...ВАШ_КЛЮЧ
+geminillm.exe -save-key AIzaSy...YOUR_KEY_HERE
 ```
-Вы можете добавлять несколько ключей. Утилита будет выбирать их случайным образом при каждом запросе.
+You can add multiple keys. The utility will randomly select a key for each request to maximize availability.
 
-## 🚀 Примеры использования
+## 🚀 Usage Examples
 
-### 1. Простой запрос с поиском
-Модели Gemini сами решат, нужно ли идти в интернет за ответом.
+### 1. Real-time Search Query
+Gemini models will autonomously decide when to use Google Search to verify facts.
 ```powershell
-echo "Кто выиграл последний чемпионат мира по футболу?" | geminillm.exe
-```
-
-### 2. Работа с изображениями и OCR
-Поддерживаются `.png`, `.jpg`, `.webp` и `.pdf`.
-```powershell
-geminillm.exe -f "C:\Docs\invoice.pdf" -s "Извлеки сумму к оплате в JSON" -j
+echo "Who won the most recent Super Bowl?" | geminillm.exe
 ```
 
-### 3. Режим чата (Общая история)
-Вы можете использовать тот же ID чата, что и в Mistral.
+### 2. PDF Analysis & OCR
+Process `.png`, `.jpg`, `.webp`, or `.pdf` files directly.
 ```powershell
-echo "Привет, меня зовут Дмитрий" | geminillm.exe -chat session_1
-echo "Как меня зовут?" | geminillm.exe -chat session_1
+geminillm.exe -f "C:\Docs\invoice.pdf" -s "Extract the total due as a JSON object" -j
 ```
 
-### 4. Сложные вычисления
-Благодаря инструменту `code_execution`, Gemini напишет и выполнит Python-скрипт для решения задачи.
+### 3. Stateful Chat (Shared History)
+Continue a conversation started with Mistral or another ClipGen-m module.
 ```powershell
-echo "Вычисли факториал 50 и умножь на корень из 12345" | geminillm.exe
+echo "Hi, my name is Alex" | geminillm.exe -chat session_1
+echo "What is my name?" | geminillm.exe -chat session_1
 ```
 
-## 📚 Справочник аргументов
+### 4. High-Precision Math
+Using the `code_execution` tool, Gemini can write and run Python scripts to solve complex math.
+```powershell
+echo "Calculate the factorial of 50 and multiply it by the square root of 12345" | geminillm.exe
+```
 
-| Флаг | Описание | Пример |
+## 📚 Command-Line Reference
+
+| Flag | Description | Example |
 | :--- | :--- | :--- |
-| `-f` | Путь к файлу (картинка, аудио, PDF). Можно несколько. | `-f "1.png" -f "2.pdf"` |
-| `-s` | Системный промпт (инструкция роли). | `-s "Отвечай как дед"` |
-| `-j` | JSON режим (только для моделей Gemini). | `-j` |
-| `-m` | Принудительный режим: `auto`, `general`, `code`, `ocr`, `vision`. | `-m ocr` |
-| `-t` | Температура (0.0 - 2.0). | `-t 0.7` |
-| `-chat` | ID чата для сохранения/загрузки истории. | `-chat my_ref_1` |
-| `-v` | Verbose mode. Логирование процесса в stderr и файл. | `-v` |
-| `-save-key` | Сохранить API ключ в конфиг и выйти. | `-save-key AIza...` |
+| `-f` | File path (Image, Audio, PDF). Multiple files supported. | `-f "chart.png" -f "report.pdf"` |
+| `-s` | System Prompt (Role/Instruction). | `-s "Act as a technical editor"` |
+| `-j` | JSON Mode (Gemini models only). | `-j` |
+| `-m` | Manual Mode: `auto`, `general`, `code`, `ocr`, `vision`. | `-m ocr` |
+| `-t` | Temperature (0.0 - 2.0). | `-t 0.7` |
+| `-chat` | Unique Chat ID for session persistence. | `-chat dev_session_01` |
+| `-v` | Verbose Mode. Logs process details to stderr and file. | `-v` |
+| `-save-key` | Saves the API key to configuration and exits. | `-save-key AIza...` |
 
-## 🧠 Логика работы с моделями
+## 🧠 Model Routing Logic
 
-### Иерархия моделей (по умолчанию)
+### Default Model Hierarchy
 1.  **General/Vision**: `gemini-2.0-flash`, `gemini-1.5-flash`, `gemma-3-27b-it`.
 2.  **Code**: `gemini-2.0-flash`, `gemma-3-27b-it`.
-3.  **OCR (PDF)**: `gemini-2.0-flash` (наилучшая поддержка длинных документов).
+3.  **OCR (PDF)**: `gemini-2.0-flash` (Optimized for long-document context).
 
-### Различия Gemini vs Gemma
-*   **Gemini**: Поддерживает `system_instruction`, JSON-mode и встроенные инструменты (Search/Code).
-*   **Gemma**: Системный промпт автоматически склеивается с текстом пользователя (Prefixing), инструменты и JSON-mode отключаются для стабильности.
+### Gemini vs. Gemma Implementation
+*   **Gemini**: Supports native `system_instruction`, JSON-mode, and integrated tools (Search/Code Execution).
+*   **Gemma**: The system prompt is automatically prepended to the user message (Prefixing) to maintain role consistency. Tools and JSON-mode are disabled for Gemma to ensure stability.
 
-## 📁 Файлы и логи
-*   **Конфиг**: `%AppData%\clipgen-m\gemini.conf`
-*   **Логи**: `%AppData%\clipgen-m\gemini_err.log`
-*   **История чатов**: `%AppData%\clipgen-m\mistral_chats\` (общая с другими модулями).
+## 📁 Storage & Logs
+*   **Config**: `%AppData%\clipgen-m\gemini.conf`
+*   **Error Logs**: `%AppData%\clipgen-m\gemini_err.log`
+*   **Chat History**: `%AppData%\clipgen-m\mistral_chats\` (Shared with other modules).
+
+---
+**Part of the ClipGen-m Project**

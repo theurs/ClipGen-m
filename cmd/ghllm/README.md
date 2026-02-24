@@ -1,119 +1,120 @@
-# GitHub Models CLI Utility (ClipGen-m)
+# GitHub Models CLI Utility (ghllm)
 
-Умная консольная утилита для взаимодействия с бесплатными моделями **GitHub Models** (Azure AI) через командную строку Windows.
+[Read this in Russian | Читать на русском](README_RU.md)
 
-Программа является частью проекта ClipGen-m и спроектирована как альтернатива Mistral-клиенту для доступа к моделям уровня **GPT-4o** и **o1/GPT-4.1**. Поддерживает автоматическую ротацию ключей для обхода строгих лимитов (Rate Limits) бесплатного тарифа.
+An intelligent console utility for interacting with **GitHub Models** (Azure AI) via the Windows command line.
 
-## ✨ Возможности
+As a core component of the **ClipGen-m** ecosystem, this utility serves as a high-performance alternative to the Mistral client, providing free access to flagship models like **GPT-4o**, **o1**, and **GPT-4.1**. It is specifically engineered to handle the strict rate limits of the GitHub Free Tier through automated key rotation and failover logic.
 
-*   **Мультимодальность**: Поддержка текста и изображений (Vision). Понимает скриншоты, диаграммы и фотографии документов.
-*   **Умная маршрутизация**: Утилита сама выбирает модель:
-    *   `gpt-4o-mini`: Для быстрых ответов и простых задач.
-    *   `gpt-4o`: Для работы с изображениями и сложного контекста.
-    *   `gpt-4.1` (Preview): Для задач, требующих глубоких рассуждений (Reasoning) или сложного кодинга.
-*   **Отказоустойчивость (Key Rotation)**:
-    *   GitHub Free Tier имеет строгие лимиты (API Rate Limits). Утилита автоматически перебирает ключи из вашего списка.
-    *   Если один ключ получил блок `429 Too Many Requests`, программа мгновенно переключается на следующий.
-*   **Поддержка Windows**: Автоматическая корректировка кодировок (CP866/1251 -> UTF-8) для корректной работы с кириллицей в консоли.
-*   **JSON Mode**: Форсирование строгого JSON-ответа (полезно для автоматизации).
-*   **Единая экосистема**: Использует ту же папку конфигурации, что и Mistral-утилита, но свои файлы настроек.
+## ✨ Features
 
-## 🛠 Установка и Сборка
+*   **Multimodal Intelligence**: Full support for text and Vision processing. Analyze screenshots, diagrams, and photos of documents seamlessly.
+*   **Dynamic Model Routing**: The utility automatically selects the best model for the task:
+    *   `gpt-4o-mini`: Optimized for lightning-fast responses and lightweight tasks.
+    *   `gpt-4o`: The default for Vision tasks and complex contextual analysis.
+    *   `gpt-4.1` (Preview) / `o1`: Reserved for tasks requiring deep reasoning, complex logic, or advanced coding.
+*   **Automatic Key Rotation (Failover)**:
+    *   The GitHub Free Tier imposes strict API rate limits. This utility mitigates this by automatically cycling through a pool of tokens.
+    *   If a token hits a `429 Too Many Requests` error, the program instantly switches to the next available key in your list to ensure uninterrupted service.
+*   **Windows-Optimized**: Native handling of character encodings (CP866/1251 to UTF-8) for perfect Cyrillic support in the Windows terminal.
+*   **JSON Mode**: Forces structured output, making it ideal for automation scripts and integration.
+*   **Unified Ecosystem**: Shares the same configuration directory as the rest of the ClipGen-m suite while maintaining its own dedicated settings file.
 
-Для сборки требуется установленный [Go](https://go.dev/dl/).
+## 🛠 Setup and Installation
 
-1. **Скачайте зависимости**:
-   ```bash
-   go get golang.org/x/text/encoding/charmap
-   ```
+Requires [Go](https://go.dev/dl/) for building from source.
 
-2. **Соберите проект**:
-   Находясь в папке с исходным кодом (`main.go`):
-   ```bash
-   go build -ldflags="-s -w" -o github.exe main.go
-   ```
+1.  **Download Dependencies**:
+    ```bash
+    go get golang.org/x/text/encoding/charmap
+    ```
 
-Файл `github.exe` готов к работе.
+2.  **Build the Binary**:
+    Navigate to the source directory and run:
+    ```bash
+    go build -ldflags="-s -w" -o ghllm.exe main.go
+    ```
 
-## ⚙️ Настройка
+The `ghllm.exe` binary is now ready for use.
 
-Для работы требуются токены **GitHub Personal Access Token**.
-1. Получите их бесплатно на [GitHub Marketplace Models](https://github.com/marketplace/models).
-2. Рекомендуется создать несколько токенов (можно с разных аккаунтов) для увеличения суточных лимитов.
+## ⚙️ Configuration
 
-**Добавить ключ:**
+You will need **GitHub Personal Access Tokens** (PAT) to use this utility.
+1. Generate them for free at [GitHub Marketplace Models](https://github.com/marketplace/models).
+2. *Pro Tip*: Create multiple tokens (even from different accounts) to significantly increase your daily request ceiling.
+
+**Add a Key:**
 ```powershell
-github.exe -save-key ghp_ВашТокенGitHub...
+ghllm.exe -save-key ghp_YourGitHubTokenHere...
 ```
-Эта команда создаст файл конфигурации `%AppData%\clipgen-m\github.conf`.
-Выполните команду несколько раз для каждого нового ключа. Чем больше ключей, тем стабильнее работа.
+This command initializes the configuration file at `%AppData%\clipgen-m\github.conf`. Run this command for every token you want to add. The more keys you add, the more resilient your setup becomes against rate limits.
 
-## 🚀 Примеры использования
+## 🚀 Usage Examples
 
-### 1. Простой чат (Текст)
-Используйте пайпы для передачи вопроса. По умолчанию используется быстрая модель `gpt-4o-mini`.
+### 1. Simple Text Query
+Standard input can be piped directly into the utility. Uses `gpt-4o-mini` by default.
 ```powershell
-echo "Расскажи кратко теорию относительности" | github.exe
-```
-
-### 2. Сложный код (Режим Smart)
-Для сложных задач программирования лучше использовать режим `code` (или `smart`), который задействует модели `gpt-4o` или `gpt-4.1`.
-```powershell
-echo "Напиши на Go микросервис с архитектурой Clean Architecture" | github.exe -m code
+echo "Summarize the theory of relativity in three sentences" | ghllm.exe
 ```
 
-### 3. Анализ изображений (Vision)
-Передайте путь к картинке. Утилита переключится на `gpt-4o` (Vision).
+### 2. Complex Coding (Smart Mode)
+For architecture design or complex debugging, use the `code` (or `smart`) mode to trigger higher-tier models.
+```powershell
+echo "Write a Go microservice using Clean Architecture" | ghllm.exe -m code
+```
+
+### 3. Vision / Image Analysis
+Pass a file path to trigger the `gpt-4o` Vision model.
 ```cmd
-echo "Что изображено на этом графике? Сделай выводы." | github.exe -f "C:\Reports\chart.png"
+echo "What trends can you see in this chart?" | ghllm.exe -f "C:\Data\monthly_report.png"
 ```
 
-### 4. Распознавание текста (OCR)
-Хотя специализированной OCR модели нет, `gpt-4o` отлично справляется с чтением текста с фото.
+### 4. Text Extraction (OCR)
+While not a dedicated OCR engine, GPT-4o excels at reading text from images.
 ```powershell
-github.exe -m ocr -f "C:\Docs\scan.jpg"
+ghllm.exe -m ocr -f "C:\Docs\scanned_invoice.jpg"
 ```
-*В режиме `-m ocr` добавляется системная инструкция "строго транскрибируй текст".*
+*In `-m ocr` mode, the utility injects a system instruction to strictly transcribe the text.*
 
-### 5. Анализ нескольких файлов
-Можно передать несколько файлов кода для ревью.
+### 5. Multi-File Analysis
+You can pass multiple files (code or text) to provide broader context for reviews.
 ```powershell
-echo "Найди уязвимость в этом коде" | github.exe -f "server.go" -f "auth.go"
+echo "Find potential security vulnerabilities in these files" | ghllm.exe -f "server.go" -f "auth.go"
 ```
 
-## 📚 Справочник аргументов
+## 📚 Command-Line Reference
 
-| Флаг | Описание | Пример |
+| Flag | Description | Example |
 | :--- | :--- | :--- |
-| `-f` | Путь к файлу. Поддерживаются текст и изображения (`.png`, `.jpg`, `.webp`). | `-f "screen.png"` |
-| `-s` | Системный промпт (инструкция роли). | `-s "Отвечай как пират"` |
-| `-j` | JSON режим. Гарантирует валидный JSON в ответе. | `-j` |
-| `-m` | Режим работы: `auto` (дефолт), `code`/`smart` (умные модели), `vision`, `ocr`. | `-m code` |
-| `-t` | Температура (0.0 - 2.0). Внутри делится на 2 для соответствия специфике Azure. | `-t 1.0` |
-| `-v` | Verbose. Вывод подробных логов и ошибок в stderr. | `-v` |
-| `-save-key`| Сохранить API ключ в конфиг и выйти. | `-save-key ghp_...` |
+| `-f` | Path to file. Supports text and images (`.png`, `.jpg`, `.webp`). | `-f "log.txt"` |
+| `-s` | System Prompt (Role instruction). | `-s "Act as a Senior Dev"` |
+| `-j` | JSON Mode. Guarantees a valid JSON object response. | `-j` |
+| `-m` | Mode: `auto` (default), `code`/`smart` (heavy models), `vision`, `ocr`. | `-m code` |
+| `-t` | Temperature (0.0 - 2.0). Adjusted internally for Azure compatibility. | `-t 1.0` |
+| `-v` | Verbose. Outputs detailed debug logs and API status to stderr. | `-v` |
+| `-save-key`| Saves the provided GitHub PAT to the config file and exits. | `-save-key ghp_...` |
 
-## 🧠 Логика работы (Под капотом)
+## 🧠 Under the Hood
 
-### Маршрутизация (Router)
-1.  **Есть изображение** → `gpt-4o` (Vision capability).
-2.  **Режим Code/Smart** → `gpt-4o` или `gpt-4.1` (High intelligence).
-3.  **Обычный текст** → `gpt-4o-mini` (Low latency, cost-effective).
+### Smart Routing
+1.  **Image Detected** → Routes to `gpt-4o` (Vision capability).
+2.  **Code/Smart Mode Requested** → Routes to `gpt-4o`, `gpt-4.1`, or `o1` (High intelligence).
+3.  **General Text** → Routes to `gpt-4o-mini` (Low latency).
 
-### Ротация ключей (Key Rotation)
-Это критическая функция для GitHub Models.
-1.  При ошибке **401 (Unauthorized)**: Ключ помечается как невалидный до перезапуска, берется следующий.
-2.  При ошибке **429 (Too Many Requests)**:
-    *   Это частая ошибка Free Tier.
-    *   Утилита **сразу** берет следующий ключ из списка и повторяет запрос.
-    *   Это позволяет "суммировать" лимиты нескольких токенов.
-3.  При ошибке **Content Filter (Azure)**: Запрос прерывается, так как повтор с другим ключом не поможет (цензура на уровне промпта).
+### Failover & Key Rotation Logic
+This is the "secret sauce" for high availability on the GitHub Free Tier:
+1.  **401 Unauthorized**: The key is flagged as invalid for the session, and the next key is selected.
+2.  **429 Too Many Requests**: 
+    *   This is common on the free tier. 
+    *   The utility **instantly** retries the request using the next key in your pool.
+    *   This effectively aggregates the rate limits of all your tokens into a single "super-limit."
+3.  **Azure Content Filter**: If a request is blocked by safety filters, the process stops, as retrying with another key will yield the same result.
 
-## 📁 Логи и Конфигурация
+## 📁 Logs and Storage
 
-Все данные хранятся в общей папке `%AppData%\clipgen-m\`, но файлы разделены с Mistral-версией:
+All data is stored in `%AppData%\clipgen-m\`:
 
-*   **github.conf**: JSON-файл с ключами GitHub.
-*   **github_err.log**: Лог ошибок и ретраев.
+*   **github.conf**: JSON file containing your pool of GitHub PATs.
+*   **github_err.log**: Detailed log of API errors and successful retries.
 
-*Примечание: Аудио-модели (Phi-4) реализованы в коде, но временно отключены, так как публичный API GitHub Models пока не принимает аудио-файлы.*
+*Note: While Phi-4 (Audio) support is present in the codebase, it is currently disabled as the public GitHub Models API does not yet accept binary audio payloads via this specific endpoint.*

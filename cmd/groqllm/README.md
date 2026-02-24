@@ -1,115 +1,116 @@
 # Groq CLI Utility (groqllm)
 
-Сверхбыстрая консольная утилита для взаимодействия с API Groq (LPU Inference Engine) через командную строку Windows.
-Программа спроектирована для работы в экосистеме **ClipGen-m**, поддерживает пайпы (pipes), мультимодальность и умную обработку аудио.
+[Read this in Russian | Читать на русском](README_RU.md)
 
-## ✨ Возможности
+An ultra-fast, lightweight console utility designed to interface with the Groq API (LPU Inference Engine) directly via the Windows command line. Built as a core component of the **ClipGen-m** ecosystem, it features full pipe support, multimodal capabilities, and advanced audio processing.
 
-*   **Реактивная скорость**: Использует чипы LPU от Groq, обеспечивая скорость генерации до 1000 токенов в секунду.
-*   **Умный поиск в интернете**: Поддержка моделей `groq/compound`, которые умеют гуглить актуальную информацию (новости, погода, факты).
-*   **Продвинутая работа с аудио (Whisper Turbo)**:
-    *   Автоматическая очистка "галлюцинаций" (удаление фраз типа "Субтитры сделал DimaTorzok").
-    *   Умное определение языка: для коротких файлов (<30 сек) принудительно включается русский язык для точности.
-    *   **Генерация SRT**: Создание готовых субтитров с таймкодами.
-*   **Мультимодальность (Vision)**: Понимание изображений через новейшие модели Llama 4 (Scout/Maverick).
-*   **Надежность (Robust Fallback)**:
-    *   **Ротация ключей**: При ошибках лимитов (429) или авторизации (401) утилита мгновенно переключается на следующий ключ.
-    *   **Перебор моделей**: Если основная модель недоступна, запрос автоматически перенаправляется на следующую по мощности (например, Kimi -> Llama 3).
-*   **Поддержка Windows**: Корректная работа с кодировками консоли (CP866, CP1251 -> UTF-8).
+## ✨ Features
 
-## 🛠 Установка и Сборка
+*   **Sub-second Latency**: Leverages Groq’s LPU (Language Processing Unit) chips to deliver generation speeds of up to 1000 tokens per second.
+*   **Integrated Web Search**: Native support for `groq/compound` models that can query the live web for current events, weather, and real-time facts.
+*   **Advanced Audio (Whisper Turbo)**:
+    *   **Hallucination Filtering**: Automatically scrubs known Whisper artifacts (e.g., "Subtitles by..." or recurring spam phrases).
+    *   **Contextual Language Detection**: For files shorter than 30 seconds, the utility enforces target language consistency to prevent the model from defaulting to English on short clips.
+    *   **SRT Generation**: Instantly creates industry-standard subtitle files with accurate timestamps.
+*   **Multimodal (Vision)**: Analyze and describe images using the latest Llama 4 (Scout/Maverick) models.
+*   **Fault-Tolerant Architecture**:
+    *   **Dynamic Key Rotation**: Immediately cycles to the next available API key if a rate limit (429) or authorization error (401) occurs.
+    *   **Cascade Model Fallback**: If the primary model is down, the request is automatically routed to the next most powerful alternative (e.g., Kimi -> Llama 3).
+*   **Windows-First Design**: Seamlessly handles character encoding transitions (CP866/CP1251 to UTF-8) for a smooth terminal experience.
 
-Для сборки требуется установленный [Go](https://go.dev/dl/).
-Желательно (но не обязательно) наличие **ffmpeg/ffprobe** в системном PATH для точного определения длительности аудио.
+## 🛠 Setup and Installation
 
-1.  **Скачайте зависимости**:
+Requires [Go](https://go.dev/dl/). 
+*Recommended: Install **ffmpeg/ffprobe** and add it to your system PATH for more accurate audio duration detection.*
+
+1.  **Download Dependencies**:
     ```bash
     go get golang.org/x/text/encoding/charmap
     ```
 
-2.  **Соберите проект**:
-    Находясь в папке `cmd/groqllm`:
+2.  **Build from Source**:
+    Navigate to the `cmd/groqllm` directory:
     ```bash
     go build -o groqllm.exe main.go
     ```
 
-## ⚙️ Настройка
+## ⚙️ Configuration
 
-Утилита использует общую папку конфигурации с ClipGen-m.
+The utility shares a centralized configuration folder with ClipGen-m.
 
-**Добавить API ключ:**
+**Add your API Key:**
 ```powershell
-groqllm.exe -save-key gsk_Ваш_API_Ключ
+groqllm.exe -save-key gsk_Your_Groq_API_Key
 ```
-Файл настроек сохранится в `%AppData%\clipgen-m\groq.conf`. Вы можете добавлять сколько угодно ключей для обхода лимитов — утилита будет их ротировать.
+Settings are stored in `%AppData%\clipgen-m\groq.conf`. You can add multiple keys to bypass rate limits—the utility will rotate through them automatically.
 
-## 🚀 Примеры использования
+## 🚀 Usage Examples
 
-### 1. Поиск в интернете (Search)
-Если в запросе есть слова "найди", "гугли", "поищи", утилита переключится на модель Compound.
+### 1. Web Search
+The utility triggers the Compound model automatically if it detects intent keywords like "find," "search," or "google."
 ```powershell
-echo "Найди свежие новости про релиз Go 1.24" | groqllm.exe
-```
-
-### 2. Транскрибация аудио в текст
-Простое извлечение текста из голосового сообщения или файла.
-```powershell
-groqllm.exe -f "C:\Voice\message.ogg"
+echo "Find the latest news on the Go 1.24 release" | groqllm.exe
 ```
 
-### 3. Генерация субтитров (SRT)
-Создание файла субтитров с таймкодами для видео/подкаста.
+### 2. Audio Transcription
+Extract text from a voice memo or audio file instantly.
+```powershell
+groqllm.exe -f "C:\Voice\memo.ogg"
+```
+
+### 3. Subtitle Generation (SRT)
+Generate a subtitle file with timestamps for a video or podcast.
 ```powershell
 groqllm.exe -f "video.mp4" -srt > video.srt
 ```
-*Флаг `-srt` включает режим сегментации и форматирования времени.*
+*The `-srt` flag enables segmentation and time-formatting modes.*
 
-### 4. Анализ изображений (Vision)
-Описание того, что происходит на скриншоте или фото.
+### 4. Vision (Image Analysis)
+Analyze a screenshot or photo and get an AI-driven breakdown.
 ```powershell
-echo "Опиши интерфейс на скриншоте и предложи улучшения" | groqllm.exe -f "screen.png"
+echo "Describe the UI in this screenshot and suggest UX improvements" | groqllm.exe -f "ui_screen.png"
 ```
 
-### 5. Генерация кода (Chat)
+### 5. JSON Output (Code/Data)
 ```powershell
-echo "Напиши структуру JSON для товара интернет-магазина" | groqllm.exe -j
+echo "Generate a JSON schema for a retail product" | groqllm.exe -j
 ```
 
-## 📚 Справочник аргументов
+## 📚 Command-Line Reference
 
-| Флаг | Описание | Пример |
+| Flag | Description | Example |
 | :--- | :--- | :--- |
-| `-f` | Путь к файлу (аудио, картинки, текст). Можно указывать несколько раз (для картинок/текста). | `-f "voice.mp3"` |
-| `-s` | Системный промпт. По умолчанию: "Ты полезный помощник...". | `-s "Ты переводчик"` |
-| `-j` | JSON режим. Форсирует ответ в валидном JSON. | `-j` |
-| `-srt`| **Только для аудио**. Вывод результата в формате субтитров SRT (с таймкодами). | `-f "mov.mp4" -srt` |
-| `-m` | Принудительный режим: `auto`, `audio`, `vision`, `search`, `chat`. | `-m search` |
-| `-t` | Температура (0.0 - 1.0). По умолчанию `0.6`. Для аудио игнорируется (всегда 0). | `-t 0.2` |
-| `-v` | Verbose. Вывод подробных логов в stderr (полезно для отладки). | `-v` |
-| `-save-key`| Сохранить API ключ и выйти. | `-save-key gsk_...` |
+| `-f` | File path (Audio, Image, or Text). Can be used multiple times. | `-f "note.txt" -f "pic.jpg"` |
+| `-s` | System Prompt. Overrides the default "helpful assistant" prompt. | `-s "You are a translator"` |
+| `-j` | JSON Mode. Forces the response into a valid JSON object. | `-j` |
+| `-srt`| **Audio Only**. Outputs results in SRT subtitle format with timestamps. | `-f "clip.mp4" -srt` |
+| `-m` | Manual Mode: `auto`, `audio`, `vision`, `search`, `chat`. | `-m search` |
+| `-t` | Temperature (0.0 - 1.0). Default is `0.6`. (Ignored for audio). | `-t 0.2` |
+| `-v` | Verbose. Prints detailed execution logs to stderr. | `-v` |
+| `-save-key`| Saves the API key to the config file and exits. | `-save-key gsk_...` |
 
-## 🧠 Логика работы (Под капотом)
+## 🧠 Under the Hood
 
-### Маршрутизация (Router)
-1.  **Есть аудио файл?** -> Режим **Audio** (Whisper).
-2.  **Есть картинка?** -> Режим **Vision** (Llama 4).
-3.  **В тексте есть "найди/гугли"?** -> Режим **Search** (Groq Compound).
-4.  **Иначе** -> Режим **Chat**.
+### Smart Routing Logic
+1.  **Audio Detected?** -> Triggers **Audio** mode (Whisper).
+2.  **Image Detected?** -> Triggers **Vision** mode (Llama 4).
+3.  **Search Keywords Found?** -> Triggers **Search** mode (Groq Compound).
+4.  **Default** -> **Chat** mode.
 
-### Обработка Аудио (Whisper Pipeline)
-1.  **Проверка длительности**: Запускается `ffprobe`. Если файл < 30 секунд (или `ffprobe` нет), принудительно ставится язык `ru`, чтобы модель не переключалась на английский на коротких фразах.
-2.  **Транскрибация**: Используется быстрая модель `whisper-large-v3-turbo`.
-3.  **Пост-процессинг**: Текст очищается от известных галлюцинаций Whisper (например, "Субтитры сделал DimaTorzok" и прочего спама).
+### Whisper Audio Pipeline
+1.  **Duration Check**: Runs `ffprobe`. If the file is under 30 seconds (or if ffprobe is missing), the utility forces `ru` (or your target language) to prevent "short-clip language drift."
+2.  **Transcription**: Uses the blazing-fast `whisper-large-v3-turbo` model.
+3.  **Post-Processing**: Scrubs known hallucinations and AI watermarks common in Whisper outputs.
 
-### Цепочка Fallback (Отказоустойчивость)
-Если выбранная модель недоступна (500/503), утилита пробует следующую в списке:
+### Fallback Chain (High Availability)
+If the requested model is unreachable (500/503), the utility cascades through a failover list:
 1.  **Chat**: `moonshotai/kimi-k2` -> `gpt-oss-120b` -> `llama-4-maverick` -> `gpt-oss-20b` -> `llama-3.3`.
 2.  **Vision**: `llama-4-scout` -> `llama-3.2-90b`.
 3.  **Search**: `compound-mini` -> `compound`.
 
-## 📁 Логи и Конфигурация
+## 📁 Logs and Storage
 
-*   **Конфиг**: `%AppData%\clipgen-m\groq.conf`
-*   **Логи**: `%AppData%\clipgen-m\groq_err.log`
+*   **Config Path**: `%AppData%\clipgen-m\groq.conf`
+*   **Error Logs**: `%AppData%\clipgen-m\groq_err.log`
 
-В логах ошибок API ключи маскируются (видны только последние 4 символа), что позволяет безопасно делиться логами при отладке.
+*Security Note: API keys are masked in logs (only the last 4 characters are visible), making it safe to share log files for debugging.*

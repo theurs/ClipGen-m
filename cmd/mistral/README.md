@@ -1,149 +1,136 @@
 # Mistral CLI
 
-Mistral CLI - это мощный консольный интерфейс для взаимодействия с API Mistral, с поддержкой расширенных инструментов, интеграции с Lua для выполнения сложных вычислений и веб-поиска через Tavily.
+[Read this in Russian | Читать на русском](README_RU.md)
 
-## Особенности
+Mistral CLI is a powerful command-line interface for interacting with the Mistral AI API. It features advanced autonomous tool-calling, Lua-based scripting for complex logic, and real-time web search integration via Tavily.
 
-- **Инструменты**: Встроенная поддержка вызова инструментов для выполнения различных задач
-  - **Калькулятор**: Использование Lua для выполнения математических вычислений, алгоритмов и скриптов
-  - **Поиск**: Интеграция с Tavily API для выполнения веб-поиска с актуальной информацией
-- **Режимы работы**: general, code, vision, audio, ocr
-- **Чат**: Поддержка диалогов с сохранением истории
-- **Файлы**: Поддержка работы с изображениями, аудио и текстовыми файлами
-- **Поддержка аудио**: Для лучшей совместимости с различными форматами аудио рекомендуется использовать установленный в системе ffmpeg для предварительной конвертации файлов в поддерживаемые форматы (MP3, WAV)
-- **Переключение моделей**: Автоматическое переключение между моделями при ошибках
-- **Управление ключами**: Поддержка нескольких API-ключей с автоматическим переключением
-- **Ротация ключей Tavily**: Случайное перемешивание ключей для равномерного распределения нагрузки
+## Key Features
 
-## Установка
+- **Autonomous Tool Calling**: Built-in engine that dynamically executes tasks:
+  - **Scripting & Math**: Uses an isolated Lua environment to perform high-precision calculations, run algorithms, and execute custom logic.
+  - **Live Web Search**: Integrated Tavily API support for fetching real-time data and news.
+- **Specialized Workloads**: Optimized modes for `general` chat, `code` generation, `vision` (images), `audio`, and `ocr`.
+- **Stateful Conversations**: Full support for persistent chat history with local session management.
+- **Multimedia Processing**: Native handling of images, audio files, and plain text.
+- **Smart Audio Support**: Seamlessly integrates with system-wide `ffmpeg` to ensure compatibility across various audio formats (converting to MP3/WAV automatically).
+- **High Availability**:
+  - **Model Failover**: Automatically switches to backup models if the primary model encounters an error.
+  - **Key Load Balancing**: Supports multiple API keys with automatic failover for Mistral and randomized rotation for Tavily to optimize rate limits.
 
-1. Скачайте исполняемый файл `mistral.exe`
-2. Убедитесь, что в системе установлены необходимые зависимости:
-   - Go (для запуска Lua-скриптов, если используется локально)
-3. (Опционально) Установите API-ключи для использования (см. раздел "Ключи")
+## Installation
 
-## Использование
+1. Download the `mistral.exe` binary.
+2. **Prerequisites**:
+   - Modern Go environment (required for the Lua executor if running scripts locally).
+3. (Optional) Configure your API keys (see the "Key Management" section).
 
-### Базовое использование
+## Usage
 
-```bash
-# Простой запрос (инструменты включены по умолчанию)
-echo "Привет! Как дела?" | mistral
-
-# Запрос с файлом
-mistral -f файл.txt
-
-# Запрос с изображением
-mistral -f фото.jpg
-
-# Запрос с несколькими файлами
-mistral -f файл1.txt -f изображение.jpg
-```
-
-### Режимы работы
+### Basic Prompting
 
 ```bash
-# Режим по умолчанию (general)
-echo "Объясни смысл жизни" | mistral
+# Standard query (Tools are enabled by default)
+echo "How's the weather in London?" | mistral
 
-# Режим кода
-echo "Объясни этот код" | mistral -m code
+# Process a text file
+mistral -f summary.txt
 
-# Режим зрения (для изображений)
-mistral -f image.jpg -m vision
+# Analyze an image
+mistral -f photo.jpg
 
-# Режим аудио (для аудио файлов)
-mistral -f audio.mp3 -m audio
-
-# Режим OCR (для PDF/изображений с текстом)
-mistral -f document.pdf -m ocr
+# Multi-file context
+mistral -f context.txt -f data.csv -f chart.png
 ```
 
-### Параметры командной строки
-
-- `-f файл`: Добавить файл к запросу (можно использовать несколько раз)
-- `-s "системный промпт"`: Задать свой системный промпт (заменяет конфигурационный)
-- `-j`: Форсировать JSON вывод
-- `-m режим`: Режим работы (auto, general, code, ocr, audio, vision)  
-- `-t температура`: Температура генерации (0.0-2.0, заменяет конфигурационную)
-- `-v`: Включить verbose логирование в stderr
-- `-save-key ВАШ_КЛЮЧ`: Сохранить Mistral API ключ и выйти
-- `-add-tavily-key ВАШ_КЛЮЧ`: Сохранить Tavily API ключ и выйти
-- `-chat ID`: ID чата для контекста (включает режим чата)
-- `-clear-chat ID`: Очистить историю указанного чата
-- `-no-tools`: Отключить режим вызова инструментов (инструменты включены по умолчанию)
-
-### Примеры использования инструментов
-
-Mistral автоматически решает, когда использовать инструменты, основываясь на запросе пользователя:
+### Operation Modes
 
 ```bash
-# Калькулятор: Математические вычисления
-echo "Чему равно 25 * 36 + 17 * 42?" | mistral
+# General mode (Default)
+echo "Explain quantum entanglement" | mistral
 
-# Калькулятор: Алгоритмы Lua
-echo "Вычисли факториал 15" | mistral
+# Coding assistant mode
+echo "Refactor this Go function" | mistral -m code
 
-# Калькулятор: Программы на Lua
-echo "Напиши Lua-скрипт, который сортирует массив [5, 2, 8, 1, 9]" | mistral
+# Vision mode (Image analysis)
+mistral -f screenshot.png -m vision
 
-# Поиск: Веб-поиск через Tavily
-echo "Какие последние новости о языке программирования Go?" | mistral
+# Audio mode (Transcription/Analysis)
+mistral -f lecture.mp3 -m audio
 
-# Поиск: Рыночные данные
-echo "Какова цена акций Apple сегодня?" | mistral
-
-# Смешанные запросы
-echo "Найди курс доллара и вычисли, сколько будет 100 долларов в рублях" | mistral
+# OCR mode (Extracting text from PDF/Images)
+mistral -f scan.pdf -m ocr
 ```
 
-### Режим чата
+### Command-Line Arguments
+
+- `-f <file>`: Attach a file (can be used multiple times).
+- `-s "prompt"`: Define a custom system prompt (overrides config).
+- `-j`: Force JSON output format.
+- `-m <mode>`: Set operation mode (`auto`, `general`, `code`, `ocr`, `audio`, `vision`).
+- `-t <value>`: Set temperature (0.0 - 2.0).
+- `-v`: Enable verbose logging to `stderr`.
+- `-save-key <KEY>`: Save your Mistral API key and exit.
+- `-add-tavily-key <KEY>`: Append a Tavily API key and exit.
+- `-chat <ID>`: Specify a unique Chat ID for persistent context.
+- `-clear-chat <ID>`: Wipe history for a specific chat.
+- `-no-tools`: Disable the autonomous tool-calling engine.
+
+### Using Built-in Tools
+
+Mistral CLI automatically triggers tools based on the nature of your request:
 
 ```bash
-# Начать новый чат
-echo "Привет, как дела?" | mistral -chat мой_чат
+# Math & Logic: Lua Execution
+echo "Calculate the Fibonacci sequence up to the 10th number" | mistral
 
-# Продолжить чат (история сохраняется)
-echo "А что ты умеешь?" | mistral -chat мой_чат
+# Math & Logic: High-precision math
+echo "What is (45 * 12) / (7 + 3.5)?" | mistral
 
-# Задать вопрос с контекстом из истории
-echo "Напомни, о чем мы говорили?" | mistral -chat мой_чат
+# Web Search: Real-time information
+echo "What are the trending topics in AI today?" | mistral
 
-# Очистить историю чата
-mistral -clear-chat мой_чат
+# Web Search: Market data
+echo "Find the current stock price of NVIDIA" | mistral
 
-# Очистить чат командой в сообщении
-echo "/clear" | mistral -chat мой_чат
+# Hybrid Query: Search + Math
+echo "Find the current price of Ethereum and tell me how much 2.5 ETH is worth in USD" | mistral
 ```
 
-### JSON формат
+### Chat Mode
 
 ```bash
-# Форсировать JSON вывод
-echo "Создай JSON с информацией о пользователе" | mistral -j
+# Start a new conversation thread
+echo "Let's discuss Go programming" | mistral -chat go_dev
+
+# Continue the conversation (History is preserved)
+echo "Give me an example of a worker pool" | mistral -chat go_dev
+
+# Reset a chat session
+mistral -clear-chat go_dev
+
+# Inline reset command
+echo "/clear" | mistral -chat go_dev
 ```
 
-## Конфигурация
+## Configuration
 
-### Пути к файлам
+### File Locations
 
-- **Конфигурационный файл**: `%APPDATA%\clipgen-m\mistral.conf`
-- **Конфигурация Tavily**: `%APPDATA%\clipgen-m\tavily.conf`  
-- **История чатов**: `%APPDATA%\clipgen-m\mistral_chats\`
-- **Логи ошибок**: `%APPDATA%\clipgen-m\mistral_err.log`
+- **Main Config**: `%APPDATA%\clipgen-m\mistral.conf`
+- **Tavily Config**: `%APPDATA%\clipgen-m\tavily.conf`
+- **Chat History**: `%APPDATA%\clipgen-m\mistral_chats\`
+- **Error Logs**: `%APPDATA%\clipgen-m\mistral_err.log`
 
-### Формат конфигурационного файла
-
-Файл `mistral.conf` в формате JSON:
+### `mistral.conf` Example (JSON)
 
 ```json
 {
   "api_keys": [
-    "ваш_первый_mistral_api_ключ",
-    "ваш_второй_mistral_api_ключ"
+    "primary_mistral_key",
+    "backup_mistral_key"
   ],
   "base_url": "https://api.mistral.ai",
-  "system_prompt": "Ваш системный промпт по умолчанию",
+  "system_prompt": "You are a professional assistant. Be concise and provide direct answers.",
   "temperature": 0.7,
   "max_tokens": 8000,
   "models": {
@@ -154,99 +141,56 @@ echo "Создай JSON с информацией о пользователе" |
     "ocr": ["mistral-ocr-latest"]
   },
   "chat_history_max_messages": 30,
-  "chat_history_max_chars": 50000,
-  "image_char_cost": 2000
+  "chat_history_max_chars": 50000
 }
 ```
 
-### Формат конфигурации Tavily
+## Key Management
 
-Файл `tavily.conf` в формате JSON:
-
-```json
-{
-  "api_keys": [
-    "ваш_первый_tavily_api_ключ",
-    "ваш_второй_tavily_api_ключ",
-    "ваш_третий_tavily_api_ключ"
-  ]
-}
-```
-
-## Управление ключами
-
-### Добавление ключей
+### Adding Keys via CLI
 
 ```bash
-# Добавить Mistral API ключ
-mistral -save-key sk-abcdefghijklmnopqrstuvwxyz1234567890
+# Save your Mistral API key
+mistral -save-key sk-your-mistral-key-here
 
-# Добавить Tavily API ключ
-mistral -add-tavily-key tvly-abcdefghijklmnopqrstuvwxyz1234567890
+# Add a Tavily API key for search capabilities
+mistral -add-tavily-key tvly-your-tavily-key-here
 ```
 
-### Множественные ключи
+The application intelligently manages these keys:
+- **Mistral**: Auto-switches keys if an authorization or rate-limit error occurs.
+- **Tavily**: Uses randomized rotation across all available keys for load balancing.
 
-Mistral поддерживает использование нескольких ключей:
-- Для Mistral API: автоматическое переключение при ошибках авторизации или лимитах
-- Для Tavily API: случайное перемешивание ключей для равномерного распределения нагрузки
+## Tool Engine Details
 
-## Логирование
+### Lua Scripting Engine
+- Handles high-precision math and complex algorithmic tasks.
+- Accesses standard Lua libraries for data processing.
+- Runs in a secure, sandboxed environment.
 
-- **Вербозный режим**: Используйте флаг `-v` для подробного логирования в stderr
-- **Файл логов ошибок**: `%APPDATA%\clipgen-m\mistral_err.log`
-- **Ротация логов**: Файл логов ротируется при достижении 10MB
+### Web Search (Tavily)
+- Fetches real-time web results with summaries.
+- Supports multi-key load balancing.
+- Implements content-length capping to prevent context window overflow.
 
-## Система вызова инструментов
+## Troubleshooting
 
-Mistral использует встроенную систему вызова инструментов:
+1. **"No input provided"**: Ensure you are piping data via `stdin` or using the `-f` flag.
+2. **"No API keys"**: Add your keys using the `-save-key` or `-add-tavily-key` flags.
+3. **Lua Issues**: Ensure a modern Go compiler is installed for the Lua executor component.
+4. **Ffmpeg Warnings**: For better audio support, ensure `ffmpeg` is added to your system's PATH.
 
-### Калькулятор (Lua)
+## Development
 
-- Выполняет математические вычисления с высокой точностью
-- Поддерживает все функции Lua и стандартные библиотеки
-- Может выполнять сложные алгоритмы и скрипты
-- Безопасное выполнение в изолированной среде
-
-### Поиск (Tavily)
-
-- Выполняет веб-поиск с актуальной информацией
-- Возвращает краткие выжимки и топ результатов
-- Поддерживает несколько API-ключей с ротацией
-- Ограничивает размер контента для предотвращения перегрузки контекста
-
-## Совместимость
-
-- **ОС**: Windows, Linux, macOS (требуется адаптация путей)
-- **Требования**: Современная версия Go (для работы Lua-исполнителя)
-- **Зависимости**: golang.org/x/text/encoding/charmap, другие стандартные библиотеки Go
-
-## Устранение неполадок
-
-1. **"Нет входных данных"**: Убедитесь, что вы передаете что-то в stdin или используете файлы
-2. **"Нет API ключей"**: Добавьте хотя бы один ключ с помощью `mistral -save-key ВАШ_КЛЮЧ`
-3. **Ошибки с инструментами**: Проверьте, установлены ли соответствующие конфигурации
-4. **Проблемы с Lua**: Убедитесь, что исполняемый файл `lua-executor` доступен
-5. **Проблемы с Tavily**: Убедитесь, что файл `tavily.conf` правильно настроен
-
-## Разработка
-
-Проект написан на Go и может быть скомпилирован с помощью:
+The project is built with Go. To compile:
 
 ```bash
 go build -o mistral.exe main.go
 ```
 
-### Архитектура
+## License
 
-- **main.go**: Основная логика приложения
-- **lua-executor/**: Подсистема выполнения Lua-скриптов
-- **tavily-test/**: Подсистема поиска через Tavily
+This project is licensed under the MIT License.
 
-## Лицензия
-
-Этот проект распространяется по лицензии MIT.
-
-## Авторы
-
-ClipGen-m проект
+---
+**Part of the ClipGen-m Project**
