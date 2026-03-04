@@ -35,6 +35,7 @@ const (
 // Списки моделей по умолчанию на базе актуальных моделей Google
 var DefaultModels = map[string][]string{
 	"general": {
+		"gemini-3.1-flash-lite-preview",
 		"gemini-3-flash-preview",
 		"gemini-2.5-flash",
 		"gemini-2.5-flash-lite",
@@ -43,18 +44,21 @@ var DefaultModels = map[string][]string{
 		"gemma-3-27b-it",
 	},
 	"vision": {
+		"gemini-3.1-flash-lite-preview",
 		"gemini-3-flash-preview",
 		"gemini-2.5-flash",
 		"gemini-2.5-flash-preview-09-2025",
 		"gemma-3-27b-it",
 	},
 	"code": {
+		"gemini-3.1-flash-lite-preview",
 		"gemini-3-flash-preview",
 		"gemini-2.5-flash",
 		"gemini-2.5-flash-lite",
 		"gemma-3-27b-it",
 	},
 	"ocr": {
+		"gemini-3.1-flash-lite-preview",
 		"gemini-3-flash-preview",
 		"gemini-2.5-flash-lite-preview-09-2025",
 		"gemini-2.5-flash-lite",
@@ -149,7 +153,7 @@ func parseArgs() *UnifiedFlags {
 	args := os.Args[1:]
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
-		
+
 		// Обработка аргументов с двойным дефисом
 		if strings.HasPrefix(arg, "--") {
 			key := strings.TrimPrefix(arg, "--")
@@ -241,7 +245,7 @@ func parseArgs() *UnifiedFlags {
 // mainUnified экспортная функция для использования в основном файле
 func mainUnified() {
 	flags := parseArgs()
-	
+
 	// Устанавливаем глобальную переменную для совместимости с logVerbose
 	flagVerbose = flags.Verbose
 
@@ -407,11 +411,11 @@ func requestGemini(apiKey, baseURL, model, system, prompt string, files []FileDa
 			}
 			if strings.HasPrefix(file.MimeType, "application/") &&
 				(strings.Contains(file.MimeType, "pdf") ||
-				 strings.Contains(file.MimeType, "wordprocessingml") ||
-				 strings.Contains(file.MimeType, "msword") ||
-				 strings.Contains(file.MimeType, "spreadsheetml") ||
-				 strings.Contains(file.MimeType, "ms-excel") ||
-				 strings.Contains(file.MimeType, "rtf")) {
+					strings.Contains(file.MimeType, "wordprocessingml") ||
+					strings.Contains(file.MimeType, "msword") ||
+					strings.Contains(file.MimeType, "spreadsheetml") ||
+					strings.Contains(file.MimeType, "ms-excel") ||
+					strings.Contains(file.MimeType, "rtf")) {
 				hasDocuments = true
 			}
 		}
@@ -665,7 +669,7 @@ func processFiles(paths []string) (res []FileData, hasImg, hasAudio, hasPdf bool
 		// Additional check: if we have an OGG file that was detected as application/ogg,
 		// treat it as audio since OGG files are typically audio/video containers
 		if mt == "application/ogg" || mt == "application/opus" {
-			mt = "audio/ogg"  // Normalize to audio type
+			mt = "audio/ogg" // Normalize to audio type
 		}
 
 		// Check if this is an unsupported audio format that needs transcoding
