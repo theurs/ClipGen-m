@@ -396,6 +396,9 @@ func requestGemini(apiKey, baseURL, model, system, prompt string, files []FileDa
 	if !isGemma {
 		req.SystemInstruction = &Content{Parts: []Part{{Text: system}}}
 
+		// gemini-3.1-flash-lite-preview использует urlContext вместо google_search
+		useUrlContext := strings.Contains(modelL, "gemini-3.1-flash-lite-preview")
+
 		// Новые модели требуют "google_search"
 		searchToolName := "google_search_retrieval"
 		if strings.Contains(modelL, "gemini-2.5") || strings.Contains(modelL, "gemini-2.0") || strings.Contains(modelL, "gemini-3") {
@@ -420,16 +423,31 @@ func requestGemini(apiKey, baseURL, model, system, prompt string, files []FileDa
 			}
 		}
 
-		// Для аудио, видео и документов отключаем code_execution, т.к. он не поддерживает многие форматы
+		// Для аудио, видео и документов отключаем codeExecution, т.к. он не поддерживает многие форматы
 		if hasMedia || hasDocuments {
-			req.Tools = []interface{}{
-				map[string]interface{}{searchToolName: map[string]interface{}{}},
-				// code_execution инструмент отключен для аудио/видео/документов
+			if useUrlContext {
+				// urlContext + codeExecution для gemini-3.1-flash-lite-preview
+				req.Tools = []interface{}{
+					map[string]interface{}{"urlContext": map[string]interface{}{}},
+				}
+			} else {
+				req.Tools = []interface{}{
+					map[string]interface{}{searchToolName: map[string]interface{}{}},
+					// codeExecution инструмент отключен для аудио/видео/документов
+				}
 			}
 		} else {
-			req.Tools = []interface{}{
-				map[string]interface{}{searchToolName: map[string]interface{}{}},
-				map[string]interface{}{"code_execution": map[string]interface{}{}},
+			if useUrlContext {
+				// urlContext + codeExecution для gemini-3.1-flash-lite-preview
+				req.Tools = []interface{}{
+					map[string]interface{}{"urlContext": map[string]interface{}{}},
+					map[string]interface{}{"codeExecution": map[string]interface{}{}},
+				}
+			} else {
+				req.Tools = []interface{}{
+					map[string]interface{}{searchToolName: map[string]interface{}{}},
+					map[string]interface{}{"codeExecution": map[string]interface{}{}},
+				}
 			}
 		}
 	} else {
