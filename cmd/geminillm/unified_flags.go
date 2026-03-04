@@ -81,16 +81,51 @@ type GeminiRequest struct {
 	SystemInstruction *Content          `json:"system_instruction,omitempty"`
 	GenerationConfig  *GenerationConfig `json:"generation_config,omitempty"`
 	Tools             []interface{}     `json:"tools,omitempty"`
+	ToolConfig        *ToolConfig       `json:"tool_config,omitempty"`
+}
+
+type ToolConfig struct {
+	FunctionCallingConfig *FunctionCallingConfig `json:"function_calling_config,omitempty"`
+}
+
+type FunctionCallingConfig struct {
+	Mode string `json:"mode,omitempty"` // AUTO, ANY, NONE
+}
+
+type FunctionDeclaration struct {
+	Name        string              `json:"name"`
+	Description string              `json:"description"`
+	Parameters  *FunctionParameters `json:"parameters,omitempty"`
+}
+
+type FunctionParameters struct {
+	Type       string                 `json:"type"`
+	Properties map[string]interface{} `json:"properties,omitempty"`
+	Required   []string               `json:"required,omitempty"`
+}
+
+type Part struct {
+	Text             string            `json:"text,omitempty"`
+	Thought          bool              `json:"thought,omitempty"`
+	InlineData       *InlineData       `json:"inline_data,omitempty"`
+	FunctionCall     *FunctionCall     `json:"functionCall,omitempty"`     // ИСПРАВЛЕНО: CamelCase
+	FunctionResponse *FunctionResponse `json:"functionResponse,omitempty"` // ИСПРАВЛЕНО: CamelCase
+	ThoughtSignature string            `json:"thoughtSignature,omitempty"` // ИСПРАВЛЕНО: CamelCase
+}
+
+type FunctionCall struct {
+	Name string                 `json:"name"`
+	Args map[string]interface{} `json:"args"`
+}
+
+type FunctionResponse struct {
+	Name     string      `json:"name"`
+	Response interface{} `json:"response"`
 }
 
 type Content struct {
 	Role  string `json:"role,omitempty"`
 	Parts []Part `json:"parts"`
-}
-
-type Part struct {
-	Text       string      `json:"text,omitempty"`
-	InlineData *InlineData `json:"inline_data,omitempty"`
 }
 
 type InlineData struct {
@@ -99,8 +134,14 @@ type InlineData struct {
 }
 
 type GenerationConfig struct {
-	Temperature      float64 `json:"temperature,omitempty"`
-	ResponseMimeType string  `json:"response_mime_type,omitempty"`
+	Temperature      float64         `json:"temperature,omitempty"`
+	ResponseMimeType string          `json:"response_mime_type,omitempty"`
+	ThinkingConfig   *ThinkingConfig `json:"thinking_config,omitempty"`
+}
+
+type ThinkingConfig struct {
+	ThinkingLevel   string `json:"thinking_level,omitempty"`
+	IncludeThoughts bool   `json:"include_thoughts,omitempty"` // Добавлено
 }
 
 type GeminiResponse struct {
@@ -130,16 +171,40 @@ type FileData struct {
 	Name, MimeType, Base64Content string
 }
 
+// --- Структуры Tavily API ---
+
+type TavilySearchRequest struct {
+	ApiKey        string `json:"api_key"`
+	Query         string `json:"query"`
+	SearchDepth   string `json:"search_depth,omitempty"`
+	IncludeAnswer bool   `json:"include_answer,omitempty"`
+	MaxResults    int    `json:"max_results,omitempty"`
+}
+
+type TavilySearchResponse struct {
+	Query        string  `json:"query"`
+	Answer       string  `json:"answer,omitempty"`
+	ResponseTime float64 `json:"response_time,omitempty"`
+	Results      []struct {
+		URL     string  `json:"url"`
+		Title   string  `json:"title"`
+		Content string  `json:"content"`
+		Score   float64 `json:"score"`
+	} `json:"results"`
+}
+
 // UnifiedFlags структура для хранения унифицированных флагов
 type UnifiedFlags struct {
-	Files   []string
-	System  string
-	Json    bool
-	Mode    string
-	Temp    float64
-	Verbose bool
-	SaveKey string
-	ChatID  string
+	Files         []string
+	System        string
+	Json          bool
+	Mode          string
+	Temp          float64
+	Verbose       bool
+	SaveKey       string
+	SaveTavilyKey string
+	ChatID        string
+	NoTools       bool
 }
 
 // parseArgs унифицированный парсер аргументов, поддерживающий как одинарные, так и двойные дефисы
@@ -189,11 +254,18 @@ func parseArgs() *UnifiedFlags {
 				if i < len(args) {
 					flags.SaveKey = args[i]
 				}
+			case "save-tavily-key":
+				i++
+				if i < len(args) {
+					flags.SaveTavilyKey = args[i]
+				}
 			case "chat", "chat-id":
 				i++
 				if i < len(args) {
 					flags.ChatID = args[i]
 				}
+			case "no-tools":
+				flags.NoTools = true
 			}
 		} else if strings.HasPrefix(arg, "-") {
 			// Обработка аргументов с одинарным дефисом
@@ -230,11 +302,18 @@ func parseArgs() *UnifiedFlags {
 				if i < len(args) {
 					flags.SaveKey = args[i]
 				}
+			case "save-tavily-key":
+				i++
+				if i < len(args) {
+					flags.SaveTavilyKey = args[i]
+				}
 			case "chat":
 				i++
 				if i < len(args) {
 					flags.ChatID = args[i]
 				}
+			case "no-tools":
+				flags.NoTools = true
 			}
 		}
 	}
@@ -258,6 +337,14 @@ func mainUnified() {
 		if err := addKeyToConfig(configPath, flags.SaveKey); err != nil {
 			fatal("Ошибка сохранения ключа: %v", err)
 		}
+		return
+	}
+
+	if flags.SaveTavilyKey != "" {
+		if err := addTavilyKey(flags.SaveTavilyKey); err != nil {
+			fatal("Ошибка сохранения Tavily ключа: %v", err)
+		}
+		fmt.Printf("Tavily ключ добавлен в %s\n", getTavilyConfigPath())
 		return
 	}
 
@@ -286,6 +373,10 @@ func mainUnified() {
 	if finalSystem == "" {
 		finalSystem = DefaultSystemPrompt
 	}
+
+	// Подмешиваем текущую дату, чтобы модель знала, какой сейчас год и день
+	currentDate := time.Now().Format("02 January 2006 15:04")
+	finalSystem = fmt.Sprintf("Current date and time: %s\n\n%s", currentDate, finalSystem)
 
 	finalTemp := cfg.Temperature
 	if flags.Temp != -1.0 {
@@ -324,7 +415,7 @@ func mainUnified() {
 				chatHistory, _ = loadChatHistory(flags.ChatID)
 			}
 
-			result, errReq := requestGemini(apiKey, cfg.BaseURL, modelName, finalSystem, userPrompt, filesData, finalTemp, flags.Json, chatHistory)
+			result, errReq := requestGemini(apiKey, cfg.BaseURL, modelName, finalSystem, userPrompt, filesData, finalTemp, flags.Json, chatHistory, flags.NoTools)
 
 			if errReq == nil {
 				// Успех
@@ -381,31 +472,95 @@ func mainUnified() {
 
 // --- API Логика ---
 
-func requestGemini(apiKey, baseURL, model, system, prompt string, files []FileData, temp float64, isJson bool, history *ChatHistory) (string, error) {
-	url := fmt.Sprintf("%s/models/%s:generateContent?key=%s", baseURL, model, apiKey)
+// executeCalculator выполняет вычисления через lua-executor
+func executeCalculator(expression string) (string, error) {
+	logVerbose("Tool: Calculator -> %s", expression)
+
+	// Попробуем найти lua-executor.exe в различных расположениях
+	localPath := "./lua-executor/lua-executor.exe"
+	if _, err := os.Stat(localPath); err == nil {
+		cmd := exec.Command(localPath, expression)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err = cmd.Run()
+		if err != nil {
+			return "", fmt.Errorf("error executing %s: %v, stderr: %s", localPath, err, stderr.String())
+		}
+		return strings.TrimSpace(stdout.String()), nil
+	}
+
+	currentDirPath := "./lua-executor.exe"
+	if _, err := os.Stat(currentDirPath); err == nil {
+		cmd := exec.Command(currentDirPath, expression)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err = cmd.Run()
+		if err != nil {
+			return "", fmt.Errorf("error executing %s: %v, stderr: %s", currentDirPath, err, stderr.String())
+		}
+		return strings.TrimSpace(stdout.String()), nil
+	}
+
+	luaExecPath, err := exec.LookPath("lua-executor.exe")
+	if err == nil {
+		cmd := exec.Command(luaExecPath, expression)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err = cmd.Run()
+		if err != nil {
+			return "", fmt.Errorf("error executing %s: %v, stderr: %s", luaExecPath, err, stderr.String())
+		}
+		return strings.TrimSpace(stdout.String()), nil
+	}
+
+	cmdStr := fmt.Sprintf("cd lua-executor && go run main.go \"%s\"", strings.ReplaceAll(expression, "\"", "\\\""))
+	out, err := runCommand(cmdStr)
+	if err != nil {
+		return "", fmt.Errorf("error executing calculator (fallback method): %v", err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func runCommand(cmdStr string) (string, error) {
+	parts := strings.Split(cmdStr, " && ")
+	if len(parts) == 1 {
+		cmd := exec.Command("cmd", "/c", parts[0])
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		if err != nil {
+			return "", fmt.Errorf("command failed: %v, stderr: %s", err, stderr.String())
+		}
+		return stdout.String(), nil
+	} else if len(parts) >= 2 {
+		dir := strings.TrimPrefix(parts[0], "cd ")
+		dir = strings.TrimSpace(dir)
+		command := strings.Join(parts[1:], " && ")
+
+		cmd := exec.Command("cmd", "/c", command)
+		cmd.Dir = dir
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		if err != nil {
+			return "", fmt.Errorf("command failed: %v, stderr: %s", err, stderr.String())
+		}
+		return stdout.String(), nil
+	}
+	return "", fmt.Errorf("invalid command format")
+}
+
+func requestGemini(apiKey, baseURL, model, system, prompt string, files []FileData, temp float64, isJson bool, history *ChatHistory, noTools bool) (string, error) {
 	modelL := strings.ToLower(model)
 	isGemma := strings.Contains(modelL, "gemma")
 
-	req := GeminiRequest{
-		GenerationConfig: &GenerationConfig{
-			Temperature: temp,
-		},
-	}
-
-	// 1. Системный промпт и инструменты
-	if !isGemma {
-		req.SystemInstruction = &Content{Parts: []Part{{Text: system}}}
-
-		// gemini-3.1-flash-lite-preview использует urlContext вместо google_search
-		useUrlContext := strings.Contains(modelL, "gemini-3.1-flash-lite-preview")
-
-		// Новые модели требуют "google_search"
-		searchToolName := "google_search_retrieval"
-		if strings.Contains(modelL, "gemini-2.5") || strings.Contains(modelL, "gemini-2.0") || strings.Contains(modelL, "gemini-3") {
-			searchToolName = "google_search"
-		}
-
-		// Проверяем, есть ли аудио, видео или документы во входных данных
+	var tools []interface{}
+	if !isGemma && !noTools {
 		hasMedia := false
 		hasDocuments := false
 		for _, file := range files {
@@ -423,42 +578,47 @@ func requestGemini(apiKey, baseURL, model, system, prompt string, files []FileDa
 			}
 		}
 
-		// Для аудио, видео и документов отключаем codeExecution, т.к. он не поддерживает многие форматы
-		if hasMedia || hasDocuments {
-			if useUrlContext {
-				// urlContext + codeExecution для gemini-3.1-flash-lite-preview
-				req.Tools = []interface{}{
-					map[string]interface{}{"urlContext": map[string]interface{}{}},
-				}
-			} else {
-				req.Tools = []interface{}{
-					map[string]interface{}{searchToolName: map[string]interface{}{}},
-					// codeExecution инструмент отключен для аудио/видео/документов
-				}
-			}
-		} else {
-			if useUrlContext {
-				// urlContext + codeExecution для gemini-3.1-flash-lite-preview
-				req.Tools = []interface{}{
-					map[string]interface{}{"urlContext": map[string]interface{}{}},
-					map[string]interface{}{"codeExecution": map[string]interface{}{}},
-				}
-			} else {
-				req.Tools = []interface{}{
-					map[string]interface{}{searchToolName: map[string]interface{}{}},
-					map[string]interface{}{"codeExecution": map[string]interface{}{}},
-				}
+		if !hasMedia && !hasDocuments {
+			tools = []interface{}{
+				map[string]interface{}{
+					"function_declarations": []FunctionDeclaration{
+						{
+							Name:        "calculator",
+							Description: "ALWAYS use this tool for ANY mathematical calculations. NEVER guess. Executes Lua scripts for math, algorithms, and logic.",
+							Parameters: &FunctionParameters{
+								Type: "OBJECT",
+								Properties: map[string]interface{}{
+									"expression": map[string]interface{}{
+										"type":        "STRING",
+										"description": "Lua script to execute (e.g. '2+2')",
+									},
+								},
+								Required: []string{"expression"},
+							},
+						},
+						{
+							Name:        "tavily_search",
+							Description: "ALWAYS use this tool to get current information, news, exchange rates, weather, and real-time facts. NEVER guess current data.",
+							Parameters: &FunctionParameters{
+								Type: "OBJECT",
+								Properties: map[string]interface{}{
+									"query": map[string]interface{}{
+										"type":        "STRING",
+										"description": "Search query",
+									},
+								},
+								Required: []string{"query"},
+							},
+						},
+					},
+				},
 			}
 		}
-	} else {
-		prompt = fmt.Sprintf("SYSTEM INSTRUCTION: %s\n\nUSER REQUEST: %s", system, prompt)
 	}
 
-	if isJson && !isGemma {
-		req.GenerationConfig.ResponseMimeType = "application/json"
-	}
+	url := fmt.Sprintf("%s/models/%s:generateContent?key=%s", baseURL, model, apiKey)
 
-	// 2. Сборка контента
+	var reqContents []Content
 	if history != nil {
 		for _, m := range history.Messages {
 			role := m.Role
@@ -469,73 +629,151 @@ func requestGemini(apiKey, baseURL, model, system, prompt string, files []FileDa
 			if str, ok := m.Content.(string); ok {
 				parts = append(parts, Part{Text: str})
 			}
-			req.Contents = append(req.Contents, Content{Role: role, Parts: parts})
+			reqContents = append(reqContents, Content{Role: role, Parts: parts})
 		}
 	}
 
 	curPart := Part{Text: prompt}
+	if isGemma {
+		curPart.Text = fmt.Sprintf("SYSTEM INSTRUCTION: %s\n\nUSER REQUEST: %s", system, prompt)
+	}
 	curContent := Content{Role: "user", Parts: []Part{curPart}}
 	for _, f := range files {
 		curContent.Parts = append(curContent.Parts, Part{
 			InlineData: &InlineData{MimeType: f.MimeType, Data: f.Base64Content},
 		})
 	}
-	req.Contents = append(req.Contents, curContent)
+	reqContents = append(reqContents, curContent)
 
-	// 3. Запрос
-	body, _ := json.Marshal(req)
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(body))
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	respData, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		var apiErr struct {
-			Error struct {
-				Message string `json:"message"`
-				Status  string `json:"status"`
-			} `json:"error"`
+	maxIterations := 5
+	for iteration := 0; iteration < maxIterations; iteration++ {
+		req := GeminiRequest{
+			Contents: reqContents,
+			GenerationConfig: &GenerationConfig{
+				Temperature: temp,
+			},
 		}
 
-		// Парсим JSON для получения краткого статуса
-		if err := json.Unmarshal(respData, &apiErr); err == nil && apiErr.Error.Status != "" {
-			status := apiErr.Error.Status
-			msg := apiErr.Error.Message
-
-			// Сокращаем только 429 ошибки (лимиты), остальные показываем полностью
-			if status == "RESOURCE_EXHAUSTED" {
-				return "", fmt.Errorf("HTTP 429 [RESOURCE_EXHAUSTED]: Limit exceeded")
+		if strings.Contains(modelL, "gemini-3.1-flash-lite-preview") {
+			req.GenerationConfig.ThinkingConfig = &ThinkingConfig{
+				ThinkingLevel:   "MINIMAL",
+				IncludeThoughts: true,
 			}
-			// Для других ошибок, включая 400, показываем полное сообщение
-			return "", fmt.Errorf("HTTP %d [%s]: %s", resp.StatusCode, status, msg)
 		}
 
-		// Фолбэк для неизвестных ошибок
-		return "", fmt.Errorf("HTTP %d: error occurred", resp.StatusCode)
-	}
-
-	var gResp GeminiResponse
-	if err := json.Unmarshal(respData, &gResp); err != nil {
-		return "", fmt.Errorf("json parse error: %v", err)
-	}
-
-	if gResp.Error != nil {
-		return "", fmt.Errorf("API: %s", gResp.Error.Message)
-	}
-	if len(gResp.Candidates) == 0 {
-		return "", fmt.Errorf("empty response")
-	}
-
-	var finalResponse strings.Builder
-	for _, p := range gResp.Candidates[0].Content.Parts {
-		if p.Text != "" {
-			finalResponse.WriteString(p.Text)
+		if !isGemma {
+			req.SystemInstruction = &Content{Parts: []Part{{Text: system}}}
+			if len(tools) > 0 {
+				req.Tools = tools
+			}
 		}
+
+		if isJson && !isGemma {
+			req.GenerationConfig.ResponseMimeType = "application/json"
+		}
+
+		body, _ := json.Marshal(req)
+		resp, err := http.Post(url, "application/json", bytes.NewBuffer(body))
+		if err != nil {
+			return "", err
+		}
+
+		respData, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respData))
+		}
+
+		// ЛОГ ДЛЯ ОТЛАДКИ (Виден только с флагом -v)
+		// logVerbose("--- RAW JSON FROM GEMINI ---")
+		// logVerbose("%s", string(respData))
+
+		var gResp GeminiResponse
+		if err := json.Unmarshal(respData, &gResp); err != nil {
+			return "", fmt.Errorf("json parse error: %v", err)
+		}
+
+		if gResp.Error != nil {
+			return "", fmt.Errorf("API ERROR: %s", gResp.Error.Message)
+		}
+		if len(gResp.Candidates) == 0 {
+			return "", fmt.Errorf("empty response")
+		}
+
+		content := gResp.Candidates[0].Content
+
+		hasFunctionCall := false
+		for _, part := range content.Parts {
+			if part.FunctionCall != nil {
+				hasFunctionCall = true
+				break
+			}
+		}
+
+		if !hasFunctionCall {
+			var finalResponse strings.Builder
+			for _, p := range content.Parts {
+				if !p.Thought && p.Text != "" {
+					finalResponse.WriteString(p.Text)
+				}
+			}
+			return finalResponse.String(), nil
+		}
+
+		content.Role = "model"
+		reqContents = append(reqContents, content)
+
+		var funcResponses []Part
+		for _, part := range content.Parts {
+			if part.FunctionCall != nil {
+				funcName := part.FunctionCall.Name
+				args := part.FunctionCall.Args
+				sig := part.ThoughtSignature // ТЕПЕРЬ ОНО РАСПАРСИТСЯ!
+
+				var funcRes string
+				logVerbose("Executing tool: %s (Sig: %t)", funcName, sig != "")
+
+				switch funcName {
+				case "calculator":
+					expr, _ := args["expression"].(string)
+					res, err := executeCalculator(expr)
+					if err != nil {
+						funcRes = "Error: " + err.Error()
+					} else {
+						funcRes = res
+					}
+				case "tavily_search":
+					query, _ := args["query"].(string)
+					res, err := executeTavilySearch(query)
+					if err != nil {
+						funcRes = "Error: " + err.Error()
+					} else {
+						funcRes = res
+					}
+				default:
+					funcRes = "Error: unknown function"
+				}
+
+				funcResponses = append(funcResponses, Part{
+					FunctionResponse: &FunctionResponse{
+						Name: funcName,
+						Response: map[string]interface{}{
+							"result": funcRes,
+						},
+					},
+					ThoughtSignature: sig, // ЭХО ПОДПИСИ
+				})
+			}
+		}
+
+		reqContents = append(reqContents, Content{
+			Role:  "function", // Для ответов инструментов в Gemini 3.1
+			Parts: funcResponses,
+		})
 	}
 
-	return finalResponse.String(), nil
+	return "", fmt.Errorf("exceeded max tool iterations")
 }
 
 // --- Утилиты (Копия логики Mistral для совместимости) ---
@@ -965,4 +1203,147 @@ func getConfigPath() (string, error) {
 	p := filepath.Join(dir, ConfigDirName)
 	os.MkdirAll(p, 0755)
 	return filepath.Join(p, ConfigFileName), nil
+}
+
+// --- Tavily API Функции ---
+
+// getTavilyConfigPath возвращает путь к конфигурационному файлу Tavily
+func getTavilyConfigPath() string {
+	dir, _ := os.UserConfigDir()
+	return filepath.Join(dir, "clipgen-m", "tavily.conf")
+}
+
+// loadTavilyConfig загружает конфигурацию Tavily API ключей
+func loadTavilyConfig() ([]string, error) {
+	configPath := getTavilyConfigPath()
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("tavily.conf не найден в %s", configPath)
+		}
+		return nil, err
+	}
+
+	var config struct {
+		ApiKeys []string `json:"api_keys"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("ошибка парсинга tavily.conf: %v", err)
+	}
+
+	if len(config.ApiKeys) == 0 {
+		return nil, fmt.Errorf("список API ключей пуст в tavily.conf")
+	}
+
+	return config.ApiKeys, nil
+}
+
+// addTavilyKey добавляет новый API ключ Tavily в конфигурацию
+func addTavilyKey(newKey string) error {
+	configPath := getTavilyConfigPath()
+
+	// Создаем директорию если не существует
+	dir := filepath.Dir(configPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	// Пытаемся загрузить существующие ключи
+	var keys []string
+	if data, err := os.ReadFile(configPath); err == nil {
+		var config struct {
+			ApiKeys []string `json:"api_keys"`
+		}
+		if err := json.Unmarshal(data, &config); err == nil {
+			keys = config.ApiKeys
+		}
+	}
+
+	// Проверяем, есть ли уже такой ключ
+	for _, key := range keys {
+		if key == newKey {
+			return nil // Ключ уже существует
+		}
+	}
+
+	// Добавляем новый ключ
+	keys = append(keys, newKey)
+
+	// Сохраняем конфигурацию
+	config := map[string]interface{}{
+		"api_keys": keys,
+	}
+
+	data, err := json.MarshalIndent(config, "", "    ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(configPath, data, 0644)
+}
+
+// executeTavilySearch выполняет поиск через Tavily API
+func executeTavilySearch(query string) (string, error) {
+	logVerbose("Tavily Search: %s", query)
+
+	// Загружаем API ключи
+	apiKeys, err := loadTavilyConfig()
+	if err != nil {
+		return "", err
+	}
+
+	// Выбираем случайный ключ для распределения нагрузки
+	apiKey := apiKeys[rand.Intn(len(apiKeys))]
+
+	// Создаем запрос
+	req := TavilySearchRequest{
+		ApiKey:        apiKey,
+		Query:         query,
+		SearchDepth:   "basic",
+		IncludeAnswer: true,
+		MaxResults:    5,
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return "", err
+	}
+
+	// Выполняем запрос
+	resp, err := http.Post("https://api.tavily.com/search", "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		return "", fmt.Errorf("ошибка запроса к Tavily API: %v", err)
+	}
+	defer resp.Body.Close()
+
+	respData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("Tavily API вернул ошибку: HTTP %d", resp.StatusCode)
+	}
+
+	var searchResp TavilySearchResponse
+	if err := json.Unmarshal(respData, &searchResp); err != nil {
+		return "", fmt.Errorf("ошибка парсинга ответа Tavily: %v", err)
+	}
+
+	// Формируем результат
+	var result strings.Builder
+
+	if searchResp.Answer != "" {
+		result.WriteString(searchResp.Answer)
+		result.WriteString("\n\n")
+	}
+
+	if len(searchResp.Results) > 0 {
+		result.WriteString("Источники:\n")
+		for i, r := range searchResp.Results {
+			result.WriteString(fmt.Sprintf("%d. %s - %s\n", i+1, r.Title, r.URL))
+		}
+	}
+
+	return result.String(), nil
 }
