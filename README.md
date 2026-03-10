@@ -29,7 +29,7 @@ ClipGen-M is a powerful suite of utilities designed to interface with various La
 - `cmd/ghllm` – CLI utility for GitHub Copilot.
 - `cmd/groqllm` – CLI utility for Groq.
 - `cmd/pollinationsllm` – CLI utility for Pollinations AI.
-- `cmd/mistral` – CLI utility for Mistral (the original implementation).
+- `cmd/mistral` – CLI utility for Mistral.
 
 ## Main Module: ClipGen-m (Clipboard Manager)
 
