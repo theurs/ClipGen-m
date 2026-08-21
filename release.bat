@@ -58,15 +58,6 @@ if !errorlevel! neq 0 (
 )
 cd ..\..
 
-echo Building ghllm...
-cd cmd\ghllm
-go build -o ..\..\dist\windows-amd64\ghllm.exe
-if !errorlevel! neq 0 (
-    echo Error building ghllm
-    exit /b !errorlevel!
-)
-cd ..\..
-
 echo Building groqllm...
 cd cmd\groqllm
 go build -o ..\..\dist\windows-amd64\groqllm.exe
@@ -76,23 +67,6 @@ if !errorlevel! neq 0 (
 )
 cd ..\..
 
-echo Building pollinationsllm...
-cd cmd\pollinationsllm
-go build -o ..\..\dist\windows-amd64\plnllm.exe
-if !errorlevel! neq 0 (
-    echo Error building pollinationsllm
-    exit /b !errorlevel!
-)
-cd ..\..
-
-echo Building cerebrasllm...
-cd cmd\cerebrasllm
-go build -o ..\..\dist\windows-amd64\cerebrasllm.exe
-if !errorlevel! neq 0 (
-    echo Error building cerebrasllm
-    exit /b !errorlevel!
-)
-cd ..\..
 
 echo Building mistral...
 cd cmd\mistral

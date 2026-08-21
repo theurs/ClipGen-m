@@ -31,14 +31,8 @@ func GetProvider(providerName string) (LLMProvider, error) {
 		return &MistralClient{}, nil
 	case "geminillm":
 		return &GenericClient{command: "geminillm.exe"}, nil
-	case "ghllm":
-		return &GenericClient{command: "ghllm.exe"}, nil
 	case "groqllm":
 		return &GenericClient{command: "groqllm.exe"}, nil
-	case "plnllm":
-		return &GenericClient{command: "plnllm.exe"}, nil
-	case "cerebrasllm":
-		return &GenericClient{command: "cerebrasllm.exe"}, nil
 	default:
 		return &MistralClient{}, nil // Mistral по умолчанию
 	}
@@ -103,7 +97,7 @@ type GenericClient struct {
 func (g *GenericClient) Run(ctx context.Context, opts RunOptions) (string, error) {
 	args := []string{}
 
-	// Используем те же аргументы, что и mistral, так как geminillm, ghllm и groqllm
+	// Используем те же аргументы, что и mistral, так как geminillm, groqllm
 	// также поддерживают те же флаги, что и mistral
 	if opts.ChatID != "" {
 		args = append(args, "-chat", opts.ChatID)

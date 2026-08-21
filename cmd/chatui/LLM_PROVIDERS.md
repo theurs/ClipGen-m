@@ -15,10 +15,7 @@ The following architectural changes were made to support multiple AI backends:
 
 - `mistral` — Mistral AI (Default)
 - `geminillm` — Google Gemini
-- `ghllm` — GitHub Copilot / Chat
 - `groqllm` — Groq
-- `plnllm` — Pollinations AI
-- `cerebrasllm` — Cerebras Cloud (Ultra-fast LPU, Gemma 4)
 
 ## Unified CLI Flag Support
 

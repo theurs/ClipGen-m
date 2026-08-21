@@ -7,7 +7,7 @@
 
 ## Overview
 
-ClipGen-M is a powerful suite of utilities designed to interface with various Large Language Models (LLMs), including Mistral, Google Gemini, GitHub Copilot, Groq, Pollinations AI, and Cerebras Cloud. This project provides a unified command-line interface and a system-tray background service to bring AI capabilities directly to your Windows workflow.
+ClipGen-M is a powerful suite of utilities designed to interface with various Large Language Models (LLMs), including Mistral, Google Gemini, Groq. This project provides a unified command-line interface and a system-tray background service to bring AI capabilities directly to your Windows workflow.
 
 ## Key Features
 
@@ -26,10 +26,7 @@ ClipGen-M is a powerful suite of utilities designed to interface with various La
 - `cmd/clipgen-m` – The main background application (System Tray).
 - `cmd/chatui` – The graphical user interface for interactive AI chatting.
 - `cmd/geminillm` – CLI utility for Google Gemini.
-- `cmd/ghllm` – CLI utility for GitHub Copilot.
 - `cmd/groqllm` – CLI utility for Groq.
-- `cmd/pollinationsllm` – CLI utility for Pollinations AI.
-- `cmd/cerebrasllm` – CLI utility for Cerebras Cloud.
 - `cmd/mistral` – CLI utility for Mistral.
 
 ## Main Module: ClipGen-m (Clipboard Manager)
@@ -43,7 +40,7 @@ The core `clipgen-m` module is a Windows background service that lives in your s
 - **Selection Processing**: Process text currently selected in any application without overriding your clipboard.
 - **Clipboard OCR**: Extract text from images currently stored in the clipboard.
 - **Layout Switcher**: A "Punto Switcher" style feature to quickly fix text typed in the wrong keyboard layout (e.g., Russian vs. English).
-- **Multi-LLM Integration**: Switch between Mistral, Gemini, Copilot, Groq, Pollinations AI, and Cerebras Cloud on the fly.
+- **Multi-LLM Integration**: Switch between Mistral, Gemini, Copilot, Groq on the fly.
 
 ### Supported Formats:
 
@@ -74,7 +71,7 @@ ClipGen-m provides a robust chat experience through the integrated **ChatUI** an
 - **Graphical Interface**: A clean UI with markdown support and message history.
 - **Session Management**: Create, save, and switch between multiple chat sessions.
 - **File Attachments**: Drop files and images directly into your conversation.
-- **Provider Switching**: Toggle between Mistral, Gemini, GitHub Copilot, Groq, and Cerebras Cloud within the same interface.
+- **Provider Switching**: Toggle between Mistral, Gemini, Groq Cloud within the same interface.
 - **Fine-grained Control**: Set specific temperatures and system prompts per chat.
 - **Context Persistence**: Full message history is preserved to maintain conversation flow.
 
@@ -177,16 +174,11 @@ Utilities accept input via `stdin` and support various data types depending on t
 
 - `mistral.exe`: Supports images, audio, text, and PDF (via OCR).
 - `geminillm.exe`: Supports images, audio, text, and PDF (via OCR).
-- `ghllm.exe`: Supports images, text, and audio.
-- `plnllm.exe`: Supports images, audio, text, and PDF; includes tool support (Lua calculator, web search).
-- `cerebrasllm.exe`: Supports images (Gemma 4) and text. Features sub-second latency with Cerebras LPU acceleration.
 
 **CLI Examples:**
 ```cmd
 echo "Summarize this" | mistral.exe --system "Professional assistant" --temperature 0.3
 echo "Translate to French" | geminillm.exe --mode general
-echo "Make it JSON" | ghllm.exe --mode general --json
-echo "Explain quantum physics" | cerebrasllm.exe --mode general
 ```
 
 ## File Locations

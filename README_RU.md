@@ -5,7 +5,7 @@
 
 ## Описание
 
-ClipGen-M - это набор утилит для взаимодействия с различными LLM (Large Language Models), включая Mistral, Google Gemini, GitHub Copilot, Groq, Pollinations AI и Cerebras Cloud. Проект предоставляет унифицированный интерфейс командной строки для работы с различными моделями искусственного интеллекта.
+ClipGen-M - это набор утилит для взаимодействия с различными LLM (Large Language Models), включая Mistral, Google Gemini, Groq. Проект предоставляет унифицированный интерфейс командной строки для работы с различными моделями искусственного интеллекта.
 
 ## Особенности
 
@@ -26,10 +26,7 @@ ClipGen-M - это набор утилит для взаимодействия �
 - `cmd/clipgen-m` - основное приложение с системным треем
 - `cmd/chatui` - графический интерфейс для чатов
 - `cmd/geminillm` - утилита для Google Gemini
-- `cmd/ghllm` - утилита для GitHub Copilot
 - `cmd/groqllm` - утилита для Groq
-- `cmd/pollinationsllm` - утилита для Pollinations AI
-- `cmd/cerebrasllm` - утилита для Cerebras Cloud
 - `cmd/mistral` - утилита для Mistral
 
 ## Основной модуль ClipGen-m (буфер обмена)
@@ -43,7 +40,7 @@ ClipGen-M - это набор утилит для взаимодействия �
 - **Работа с выделенным текстом**: Возможность обработки выделенного текста без его копирования в буфер
 - **OCR-функции**: Извлечение текста с изображений через буфер обмена
 - **Переключение раскладки**: Функция "Punto Switcher" для быстрого переключения между русской и английской раскладками
-- **Интеграция с различными LLM**: Поддержка Mistral, Google Gemini, GitHub Copilot, Groq, Pollinations AI и Cerebras Cloud
+- **Интеграция с различными LLM**: Поддержка Mistral, Google Gemini, Groq
 
 ### Поддерживаемые форматы данных:
 
@@ -74,7 +71,7 @@ ClipGen-m предоставляет мощную чат-функциональ�
 - **Графический интерфейс**: Удобное окно чата с поддержкой форматирования и истории
 - **Управление чатами**: Создание, сохранение и переключение между различными чатами
 - **Поддержка файлов**: Возможность прикрепления файлов и изображений к сообщениям
-- **Несколько провайдеров**: Поддержка различных LLM-провайдеров (Mistral, Gemini, GitHub Copilot, Groq, Cerebras Cloud)
+- **Несколько провайдеров**: Поддержка различных LLM-провайдеров (Mistral, Gemini, Groq)
 - **Настройка параметров**: Возможность настройки температуры, системного промпта и режимов для каждого чата
 - **История сообщений**: Сохранение полной истории переписки с контекстом
 
@@ -87,10 +84,8 @@ ClipGen-m предоставляет мощную чат-функциональ�
 
 - **Mistral**: По умолчанию, поддержка различных моделей Mistral
 - **Google Gemini**: Интеграция с Google Gemini API
-- **GitHub Copilot/Chat**: Использование GitHub Copilot и связанных моделей
 - **Groq**: Поддержка моделей от Groq
-- **Pollinations AI**: Интеграция с API Pollinations
-- **Cerebras Cloud**: Интеграция с API Cerebras
+
 
 ## Горячие клавиши и действия
 
@@ -172,19 +167,14 @@ ClipGen-m работает как приложение в системном т�
 - `Mistral Config` - редактировать mistral.conf
 - `Tavily Config` - редактировать tavily.conf
 - `Geminillm Config` - редактировать gemini.conf
-- `Ghllm Config` - редактировать github.conf
 - `Groqllm Config` - редактировать groq.conf
-- `Pollinations Config` - редактировать pollinations.conf
-- `Cerebras Config` - редактировать cerebras.conf
+
 
 ### Файлы логов:
 - `Mistral Log` - просмотр mistral_err.log
 - `Geminillm Log` - просмотр gemini_err.log
-- `Ghllm Log` - просмотр github_err.log
 - `Groqllm Log` - просмотр groq_err.log
 - `ClipGen Log` - просмотр ошибок программы
-- `Pollinations Log` - просмотр pollinations_err.log
-- `Cerebras Log` - просмотр cerebras_err.log
 
 ## Конфигурация
 
@@ -249,10 +239,7 @@ actions:                                      # Список пользоват�
 
 - `mistral/build.bat`
 - `geminillm/build.bat`
-- `ghllm/build.bat`
 - `groqllm/build.bat`
-- `pollinationsllm/build.bat`
-- `cerebrasllm/build.bat`
 - `clipgen-m/build.bat`
 - `chatui/build.bat`
 
@@ -269,18 +256,13 @@ call build.bat
 Поддержка файлов:
 - `mistral.exe` - поддерживает изображения, аудио, текстовые файлы, PDF (через OCR)
 - `geminillm.exe` - поддерживает изображения, текстовые файлы, аудио (включая автоматическую конвертацию неподдерживаемых форматов с помощью ffmpeg)
-- `ghllm.exe` - поддерживает изображения, текстовые файлы, аудио
 - `groqllm.exe` - поддерживает изображения, аудио, текстовые файлы
-- `plnllm.exe` - поддерживает изображения, аудио, текстовые файлы, PDF (через OCR), с поддержкой инструментов (калькулятор Lua, поиск)
-- `cerebrasllm.exe` - поддерживает изображения (Gemma 4) и текстовые файлы; характеризуется субсекундным временем отклика (LPU-ускорение).
 
 Примеры:
 ```
 echo "Привет" | mistral.exe --system "Ты помощник" --temperature 0.7
 echo "Привет" | geminillm.exe --system "Ты помощник" --temperature 0.7
-echo "Привет" | ghllm.exe --mode general --json
 echo "Привет" | groqllm.exe --chat mychat --temperature 0.5
-echo "Привет" | cerebrasllm.exe --mode general
 ```
 
 ## Расположение файлов

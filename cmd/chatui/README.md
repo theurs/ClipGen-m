@@ -8,7 +8,7 @@ ClipGen-m ChatUI is a dedicated graphical front-end designed for seamless intera
 
 ## Key Features
 
-- **Multi-Provider Support**: Switch between Mistral, Gemini, GitHub Copilot, and Groq within a single interface.
+- **Multi-Provider Support**: Switch between Mistral, Gemini, and Groq within a single interface.
 - **Session Management**: Easily create, save, and organize multiple chat threads and histories.
 - **Media Integration**: Attach files, documents, and images directly to your messages for multimodal analysis.
 - **Granular Model Control**: Adjust parameters such as temperature, system prompts, and operational modes on a per-chat basis.
@@ -18,7 +18,6 @@ ClipGen-m ChatUI is a dedicated graphical front-end designed for seamless intera
 
 - **Mistral** (Default)
 - **Google Gemini**
-- **GitHub Copilot / Chat**
 - **Groq**
 
 ## Unified Command Interface
