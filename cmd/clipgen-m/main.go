@@ -81,6 +81,9 @@ const (
 	copySelectionTimeout = 100 * time.Millisecond
 	// copySelectionPollStep — шаг проверки буфера при ожидании копирования.
 	copySelectionPollStep = 10 * time.Millisecond
+	// clipboardRestoreDelay — пауза перед восстановлением буфера обмена.
+	// Нужна, чтобы целевое приложение успело прочитать вставленный текст из буфера.
+	clipboardRestoreDelay = 150 * time.Millisecond
 )
 
 type BITMAPFILEHEADER struct {
@@ -118,15 +121,16 @@ func captureClipboardSnapshot() ([]ClipboardSnapshot, error) {
 
 	var snapshots []ClipboardSnapshot
 
-	res, _, _ := openClipboard.Call(0)
-	if res == 0 {
-		return nil, fmt.Errorf("не удалось открыть буфер обмена для захвата")
+	// Буфер может быть временно занят другим приложением - пробуем несколько раз.
+	ok, err := tryOpenClipboard()
+	if !ok {
+		return nil, err
 	}
 	defer closeClipboard.Call()
 
 	format := uint32(0)
 	for {
-		res, _, _ = enumClipboardFormats.Call(uintptr(format))
+		res, _, _ := enumClipboardFormats.Call(uintptr(format))
 		format = uint32(res)
 		if format == 0 {
 			break
@@ -181,9 +185,10 @@ func restoreClipboardSnapshot(snapshots []ClipboardSnapshot) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	res, _, _ := openClipboard.Call(0)
-	if res == 0 {
-		return fmt.Errorf("не удалось открыть буфер обмена для восстановления")
+	// Буфер может быть временно занят другим приложением - пробуем несколько раз.
+	ok, err := tryOpenClipboard()
+	if !ok {
+		return err
 	}
 	defer closeClipboard.Call()
 
@@ -208,7 +213,7 @@ func restoreClipboardSnapshot(snapshots []ClipboardSnapshot) error {
 			memMove.Call(uPtr, uintptr(unsafe.Pointer(&snap.Data[0])), size)
 			globalUnlock.Call(hMem)
 
-			res, _, _ = setClipboardData.Call(uintptr(snap.Format), hMem)
+			res, _, _ := setClipboardData.Call(uintptr(snap.Format), hMem)
 			if res == 0 {
 				log.Printf("ERROR: SetClipboardData не принял формат %d", snap.Format)
 				globalFree.Call(hMem)
@@ -222,6 +227,48 @@ func restoreClipboardSnapshot(snapshots []ClipboardSnapshot) error {
 
 	log.Printf("Восстановлено форматов буфера из бэкапа: %d", restoredCount)
 	return nil
+}
+
+/**
+ * clearClipboard очищает буфер обмена.
+ * Используется для восстановления исходного (пустого) состояния буфера.
+ */
+func clearClipboard() error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	ok, err := tryOpenClipboard()
+	if !ok {
+		return err
+	}
+	defer closeClipboard.Call()
+
+	emptyClipboard.Call()
+	return nil
+}
+
+/**
+ * restoreClipboardAfterPaste возвращает буфер обмена к исходному состоянию после вставки.
+ * Пауза нужна, чтобы целевое приложение успело прочитать вставленный текст из буфера.
+ * saved — удалось ли получить снимок буфера; pasted — была ли выполнена вставка.
+ */
+func restoreClipboardAfterPaste(snapshot []ClipboardSnapshot, saved, pasted bool) {
+	if !saved {
+		return
+	}
+	if pasted {
+		time.Sleep(clipboardRestoreDelay)
+	}
+	if len(snapshot) == 0 {
+		// Исходный буфер был пустым — возвращаем пустое состояние.
+		if err := clearClipboard(); err != nil {
+			log.Printf("WARNING: не удалось очистить буфер обмена: %v", err)
+		}
+		return
+	}
+	if err := restoreClipboardSnapshot(snapshot); err != nil {
+		log.Printf("WARNING: не удалось восстановить буфер обмена: %v", err)
+	}
 }
 
 // ==========================================================
@@ -462,7 +509,7 @@ func handleAction(action Action) {
 		paste()
 
 		// Даем приложению-приемнику время вычитать текст из буфера, прежде чем вернуть бэкап
-		time.Sleep(keyEmulationPause)
+		time.Sleep(clipboardRestoreDelay)
 		_ = restoreClipboardSnapshot(snapshot)
 	}
 }
@@ -577,9 +624,23 @@ func convertRune(r rune, hasCyrillic, hasLatin bool) rune {
 
 /**
  * handleLayoutSwitch выполняет переключение раскладки выделенного текста.
- * Работает без бэкапа буфера обмена и с минимальными задержками.
+ * Буфер обмена сохраняется ДО копирования выделения и восстанавливается после вставки,
+ * поэтому исходное содержимое буфера пользователя остается прежним.
  */
 func handleLayoutSwitch(action Action) {
+	// Сохраняем буфер обмена до копирования выделения (Ctrl+C перезапишет его).
+	snapshot, snapErr := captureClipboardSnapshot()
+	clipboardSaved := snapErr == nil
+	if snapErr != nil {
+		log.Printf("WARNING: не удалось сохранить буфер обмена: %v", snapErr)
+	}
+
+	// Восстанавливаем буфер обмена при любом исходе обработки.
+	pasted := false
+	defer func() {
+		restoreClipboardAfterPaste(snapshot, clipboardSaved, pasted)
+	}()
+
 	resultText, err := handleLayoutSwitchAction()
 	if err != nil {
 		zenity.Error(fmt.Sprintf("Ошибка выполнения:\n%v", err),
@@ -605,6 +666,7 @@ func handleLayoutSwitch(action Action) {
 		clipboard.Write(clipboard.FmtText, []byte(resultText))
 		time.Sleep(keyEmulationPause)
 		paste()
+		pasted = true
 		time.Sleep(keyEmulationPause)
 	}
 }
