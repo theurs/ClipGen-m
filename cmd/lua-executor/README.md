@@ -1,6 +1,6 @@
 # Lua Executor Utility
 
-This is a simple utility that allows executing Lua scripts as expressions, primarily designed for mathematical calculations and algorithm execution in the Mistral CLI tool.
+This is a simple utility that allows executing Lua scripts as expressions, primarily designed for mathematical calculations and algorithm execution in the LLM CLI tools.
 
 ## Usage
 
@@ -26,7 +26,7 @@ go build .
 
 ## Integration
 
-This utility is used as an integral part of the Mistral CLI tool as a calculator for precise mathematical computations and algorithm execution. It enables Mistral to perform complex calculations and execute Lua algorithms safely.
+This utility is used as an integral part of the LLM CLI tools (e.g. `geminillm`) as a calculator for precise mathematical computations and algorithm execution. It enables them to perform complex calculations and execute Lua algorithms safely.
 
 ## Features
 

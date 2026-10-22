@@ -16,6 +16,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
 	"unsafe"
 
 	"github.com/getlantern/systray"
@@ -50,10 +51,6 @@ var (
 	findWindow                 = user32.NewProc("FindWindowW")
 	setForegroundWindow        = user32.NewProc("SetForegroundWindow")
 
-	enumWindows              = user32.NewProc("EnumWindows")
-	getWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
-	sendMessageTimeoutW      = user32.NewProc("SendMessageTimeoutW")
-
 	// Новые функции для управления видимостью
 	showWindow           = user32.NewProc("ShowWindow")
 	isWindowVisible      = user32.NewProc("IsWindowVisible")
@@ -66,16 +63,24 @@ var (
 )
 
 const (
-	CF_HDROP         = 15
-	CF_DIB           = 8
-	WM_CLOSE         = 0x0010
-	SMTO_ABORTIFHUNG = 0x0002
-	MOD_NOREPEAT     = 0x4000
-	GMEM_MOVEABLE    = 0x0002
+	CF_HDROP      = 15
+	CF_DIB        = 8
+	MOD_NOREPEAT  = 0x4000
+	GMEM_MOVEABLE = 0x0002
 
 	// Константы для ShowWindow
 	SW_HIDE    = 0
 	SW_RESTORE = 9
+)
+
+// Тайминги локальной эмуляции клавиш и проверки буфера обмена.
+const (
+	// keyEmulationPause — микропауза для локальной эмуляции клавиш (Ctrl+C / Ctrl+V).
+	keyEmulationPause = 20 * time.Millisecond
+	// copySelectionTimeout — максимальное ожидание обновления буфера после Ctrl+C.
+	copySelectionTimeout = 100 * time.Millisecond
+	// copySelectionPollStep — шаг проверки буфера при ожидании копирования.
+	copySelectionPollStep = 10 * time.Millisecond
 )
 
 type BITMAPFILEHEADER struct {
@@ -228,8 +233,6 @@ type Config struct {
 	LLMPath         string    `yaml:"llm_path"`
 	SystemPrompt    string    `yaml:"system_prompt"`
 	AppToggleHotkey string    `yaml:"app_toggle_hotkey"`
-	ChatUIPath      string    `yaml:"chatui_path"`
-	ChatUIHotkey    string    `yaml:"chatui_hotkey"`
 	Actions         []Action  `yaml:"actions"`
 }
 
@@ -242,12 +245,25 @@ type PTTConfig struct {
 }
 
 type Action struct {
-	Name        string `yaml:"name"`
-	Hotkey      string `yaml:"hotkey"`
-	Prompt      string `yaml:"prompt,omitempty"`
+	Name       string `yaml:"name"`
+	Hotkey     string `yaml:"hotkey"`
+	Prompt     string `yaml:"prompt,omitempty"`
+	LLMArgs    string `yaml:"llm_args,omitempty"`
+	InputType  string `yaml:"input_type"`
+	OutputMode string `yaml:"output_mode,omitempty"`
+
+	// MistralArgs — устаревший ключ конфига (Mistral LLM удален).
+	// Поддерживается только для обратной совместимости со старыми config.yaml.
 	MistralArgs string `yaml:"mistral_args,omitempty"`
-	InputType   string `yaml:"input_type"`
-	OutputMode  string `yaml:"output_mode,omitempty"`
+}
+
+// Args возвращает дополнительные аргументы запуска LLM-утилиты.
+// Приоритет у нового ключа llm_args, устаревший mistral_args используется как запасной.
+func (a Action) Args() string {
+	if a.LLMArgs != "" {
+		return a.LLMArgs
+	}
+	return a.MistralArgs
 }
 
 type HotkeyControl struct {
@@ -272,9 +288,6 @@ var (
 	hotkeyMutex   sync.Mutex
 	activeHotkeys []HotkeyControl
 	actionChan    = make(chan Action, 10)
-
-	chatUIProcess *os.Process
-	chatUIMutex   sync.Mutex
 )
 
 // ==========================================================
@@ -303,29 +316,10 @@ func onReady() {
 	}
 	setupTray()
 	go actionProcessor()
-	setupChatUIHotkey()
 	enableHotkeys()
 }
 
-func killChatUI() {
-	chatUIMutex.Lock()
-	defer chatUIMutex.Unlock()
-
-	if chatUIProcess != nil {
-		log.Println("Принудительное завершение процесса Chat UI...")
-		err := chatUIProcess.Kill()
-		if err != nil {
-			log.Printf("Ошибка при убийстве Chat UI: %v", err)
-		}
-		// Обнуляем переменную сразу, чтобы не пытаться убить дважды
-		chatUIProcess = nil
-	}
-}
-
 func onExit() {
-	// Гарантированно убиваем чат перед выходом
-	killChatUI()
-
 	disableHotkeys()
 	log.Println("Завершение работы.")
 }
@@ -408,17 +402,22 @@ func actionProcessor() {
 func handleAction(action Action) {
 	log.Printf("Запуск действия: %s [%s]", action.Name, action.InputType)
 
+	// Переключение раскладки — быстрый сценарий: работаем с выделенным текстом,
+	// бэкап буфера обмена там не нужен (он только создает блокировки и задержки).
+	if action.InputType == "layout_switch" {
+		handleLayoutSwitch(action)
+		return
+	}
+
 	// Делаем снимок буфера до любых манипуляций (включая copySelection)
 	snapshot, errSnap := captureClipboardSnapshot()
 	if errSnap != nil {
 		log.Printf("Ошибка создания снимка буфера: %v", errSnap)
 	}
 
-	if action.InputType != "layout_switch" {
-		systray.SetIcon(iconWait)
-		defer systray.SetIcon(iconNormal)
-		time.Sleep(250 * time.Millisecond)
-	}
+	systray.SetIcon(iconWait)
+	defer systray.SetIcon(iconNormal)
+	time.Sleep(250 * time.Millisecond)
 
 	var resultText string
 	var err error
@@ -432,8 +431,6 @@ func handleAction(action Action) {
 		resultText, err = handleImageAction(action)
 	case "text":
 		resultText, err = handleTextAction(action)
-	case "layout_switch":
-		resultText, err = handleLayoutSwitchAction()
 	}
 
 	if err != nil {
@@ -461,11 +458,11 @@ func handleAction(action Action) {
 	default:
 		// Пишем результат ИИ в буфер для вставки
 		clipboard.Write(clipboard.FmtText, []byte(resultText))
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(keyEmulationPause)
 		paste()
 
-		// Даем приложению-приемнику время (400мс) вычитать текст из буфера, прежде чем вернуть бэкап
-		time.Sleep(400 * time.Millisecond)
+		// Даем приложению-приемнику время вычитать текст из буфера, прежде чем вернуть бэкап
+		time.Sleep(keyEmulationPause)
 		_ = restoreClipboardSnapshot(snapshot)
 	}
 }
@@ -493,34 +490,129 @@ func init() {
 	}
 }
 
+/**
+ * switchLayout переключает раскладку текста пословно.
+ *
+ * Строка разбивается на слова (максимальные последовательности букв) и разделители
+ * (пробелы, переводы строк, знаки препинания, цифры). Каждое слово конвертируется
+ * независимо: слово с кириллицей переводится в латиницу, слово с латиницей — в кириллицу.
+ * Разделители между словами остаются без изменений, поэтому смешанный текст
+ * (русский + английский) обрабатывается корректно.
+ */
 func switchLayout(text string) string {
-	engChars, rusChars := 0, 0
-	for _, r := range text {
-		if _, ok := engToRus[r]; ok {
-			engChars++
-		} else if _, ok := rusToEng[r]; ok {
-			rusChars++
-		}
+	if text == "" {
+		return text
 	}
-	var conversionMap map[rune]rune
-	if rusChars > engChars {
-		conversionMap = rusToEng
-	} else {
-		conversionMap = engToRus
-	}
+
+	runes := []rune(text)
 	var builder strings.Builder
-	for _, r := range text {
-		if convertedChar, ok := conversionMap[r]; ok {
-			builder.WriteRune(convertedChar)
-		} else {
+	builder.Grow(len(text))
+
+	for i := 0; i < len(runes); {
+		r := runes[i]
+		if !unicode.IsLetter(r) {
+			// Разделитель (пробел, перевод строки, знак препинания, цифра) — оставляем как есть.
 			builder.WriteRune(r)
+			i++
+			continue
 		}
+
+		// Собираем слово — максимальную последовательность букв.
+		start := i
+		for i < len(runes) && unicode.IsLetter(runes[i]) {
+			i++
+		}
+		builder.WriteString(convertWord(runes[start:i]))
+	}
+
+	return builder.String()
+}
+
+/**
+ * convertWord конвертирует одно слово в противоположную раскладку.
+ * Направление перевода определяется по содержимому самого слова.
+ */
+func convertWord(word []rune) string {
+	hasCyrillic, hasLatin := false, false
+	for _, r := range word {
+		if unicode.Is(unicode.Cyrillic, r) {
+			hasCyrillic = true
+		} else if unicode.Is(unicode.Latin, r) {
+			hasLatin = true
+		}
+	}
+
+	var builder strings.Builder
+	builder.Grow(len(word))
+	for _, r := range word {
+		builder.WriteRune(convertRune(r, hasCyrillic, hasLatin))
 	}
 	return builder.String()
 }
 
+/**
+ * convertRune переводит один символ в противоположную раскладку.
+ * Слово целиком на кириллице переводится в латиницу, слово целиком на латинице — в кириллицу.
+ * В слове со смешанными алфавитами каждый символ переводится по своему алфавиту.
+ */
+func convertRune(r rune, hasCyrillic, hasLatin bool) rune {
+	switch {
+	case unicode.Is(unicode.Cyrillic, r):
+		if hasLatin && !hasCyrillic {
+			return r
+		}
+		if converted, ok := rusToEng[r]; ok {
+			return converted
+		}
+	case unicode.Is(unicode.Latin, r):
+		if hasCyrillic && !hasLatin {
+			return r
+		}
+		if converted, ok := engToRus[r]; ok {
+			return converted
+		}
+	}
+	return r
+}
+
+/**
+ * handleLayoutSwitch выполняет переключение раскладки выделенного текста.
+ * Работает без бэкапа буфера обмена и с минимальными задержками.
+ */
+func handleLayoutSwitch(action Action) {
+	resultText, err := handleLayoutSwitchAction()
+	if err != nil {
+		zenity.Error(fmt.Sprintf("Ошибка выполнения:\n%v", err),
+			zenity.Title("ClipGen Error"),
+			zenity.Icon(zenity.ErrorIcon))
+		log.Printf("ERROR: %v", err)
+		return
+	}
+
+	if resultText == "" {
+		log.Println("Результат пустой (выделение не найдено).")
+		return
+	}
+
+	log.Println("Успех. Вывод результата.")
+	switch action.OutputMode {
+	case "notepad", "editor":
+		if err := showInEditor(resultText); err != nil {
+			log.Printf("Ошибка открытия редактора: %v", err)
+		}
+	default:
+		// Пишем переведенный текст в буфер и вставляем его на место выделения.
+		clipboard.Write(clipboard.FmtText, []byte(resultText))
+		time.Sleep(keyEmulationPause)
+		paste()
+		time.Sleep(keyEmulationPause)
+	}
+}
+
 func handleLayoutSwitchAction() (string, error) {
-	selectedText, err := copySelection()
+	// Для смены раскладки нужен именно выделенный текст, поэтому устаревшее содержимое
+	// буфера не подставляем — иначе можно затереть выделение чужим текстом.
+	selectedText, err := copySelection(false)
 	if err != nil {
 		return "", err
 	}
@@ -548,7 +640,7 @@ func handleAutoAction(action Action) (string, error) {
 	if len(files) > 0 {
 		return processFiles(files, action)
 	}
-	clipboardText, err := copySelection()
+	clipboardText, err := copySelection(true)
 	if err == nil && len(clipboardText) > 0 {
 		cleanedPath := strings.Trim(strings.TrimSpace(clipboardText), "\"")
 		if isImageFile(cleanedPath) {
@@ -561,7 +653,7 @@ func handleAutoAction(action Action) (string, error) {
 }
 
 func handleTextAction(action Action) (string, error) {
-	clipboardText, err := copySelection()
+	clipboardText, err := copySelection(true)
 	if err != nil {
 		return "", err
 	}
@@ -578,7 +670,7 @@ func handleImageAction(action Action) (string, error) {
 		}
 	}
 	if len(imageBytes) == 0 {
-		text, err := copySelection()
+		text, err := copySelection(true)
 		if err == nil {
 			cleanedPath := strings.Trim(strings.TrimSpace(text), "\"")
 			if isImageFile(cleanedPath) {
@@ -611,7 +703,7 @@ func processText(text string, action Action) (string, error) {
 	if pErr != nil {
 		return "", nil // User canceled
 	}
-	return runLLM(finalPrompt, nil, action.MistralArgs)
+	return runLLM(finalPrompt, nil, action.Args())
 }
 
 func processImage(imageBytes []byte, action Action) (string, error) {
@@ -630,7 +722,7 @@ func processImage(imageBytes []byte, action Action) (string, error) {
 	if pErr != nil {
 		return "", nil
 	}
-	return runLLM(finalPrompt, []string{tempFile}, action.MistralArgs)
+	return runLLM(finalPrompt, []string{tempFile}, action.Args())
 }
 
 func processFiles(files []string, action Action) (string, error) {
@@ -650,7 +742,7 @@ func processFiles(files []string, action Action) (string, error) {
 	if err != nil {
 		return "", nil
 	}
-	return runLLM(finalPrompt, finalFileList, action.MistralArgs)
+	return runLLM(finalPrompt, finalFileList, action.Args())
 }
 
 // ==========================================================
@@ -797,7 +889,13 @@ func getClipboardFiles() ([]string, error) {
 	return files, nil
 }
 
-func copySelection() (string, error) {
+/**
+ * copySelection копирует выделение (Ctrl+C) и дожидается обновления буфера обмена.
+ * Если буфер не изменился и allowFallback == true, возвращается прежнее содержимое буфера
+ * (нужно для сценариев "взять текст из буфера"). При allowFallback == false возвращается
+ * ошибка, чтобы случайно не затереть выделение устаревшим содержимым.
+ */
+func copySelection(allowFallback bool) (string, error) {
 	originalContent := clipboard.Read(clipboard.FmtText)
 	kb, err := keybd_event.NewKeyBonding()
 	if err != nil {
@@ -806,19 +904,21 @@ func copySelection() (string, error) {
 	kb.SetKeys(keybd_event.VK_C)
 	kb.HasCTRL(true)
 	kb.Launching()
-	time.Sleep(150 * time.Millisecond)
+	time.Sleep(keyEmulationPause)
+
 	startTime := time.Now()
-	for time.Since(startTime) < time.Second*1 {
+	for time.Since(startTime) < copySelectionTimeout {
 		newContent := clipboard.Read(clipboard.FmtText)
 		if len(newContent) > 0 && !bytes.Equal(newContent, originalContent) {
 			return string(newContent), nil
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(copySelectionPollStep)
 	}
-	if len(originalContent) > 0 {
+
+	if allowFallback && len(originalContent) > 0 {
 		return string(originalContent), nil
 	}
-	return "", fmt.Errorf("буфер не изменился")
+	return "", fmt.Errorf("буфер обмена не изменился (выделение не скопировано)")
 }
 
 func paste() {
@@ -873,18 +973,16 @@ func setupTray() {
 
 	systray.AddSeparator()
 	mConfig := systray.AddMenuItem("Настройки (main)", "Редактировать config.yaml")
-	mMistralConf := systray.AddMenuItem("Mistral Config", "Редактировать mistral.conf")
 	mGeminillmConf := systray.AddMenuItem("Gemini Config", "Редактировать gemini.conf")
-	mGhllmConf := systray.AddMenuItem("Github Config", "Редактировать github.conf")
 	mGroqllmConf := systray.AddMenuItem("Groq Config", "Редактировать groq.conf")
+	mOpenAIConf := systray.AddMenuItem("OpenAI Config", "Редактировать openai.conf")
 	mTavilyConf := systray.AddMenuItem("Tavily Config", "Редактировать tavily.conf")
 
 	systray.AddSeparator()
 	mLog := systray.AddMenuItem("ClipGen Log", "Посмотреть ошибки программы")
-	mMistralLog := systray.AddMenuItem("Mistral Log", "Просмотр mistral_err.log")
 	mGeminillmLog := systray.AddMenuItem("Gemini Log", "Просмотр gemini_err.log")
-	mGhllmLog := systray.AddMenuItem("Github Log", "Просмотр github_err.log")
 	mGroqllmLog := systray.AddMenuItem("Groq Log", "Просмотр groq_err.log")
+	mOpenAILog := systray.AddMenuItem("OpenAI Log", "Просмотр openai_err.log")
 
 	systray.AddSeparator()
 	mReload := systray.AddMenuItem("Перезагрузка", "Применить конфиг")
@@ -924,26 +1022,22 @@ func setupTray() {
 			// Конфиги
 			case <-mConfig.ClickedCh:
 				openConfigFile()
-			case <-mMistralConf.ClickedCh:
-				openFileInConfigDir("mistral.conf")
 			case <-mTavilyConf.ClickedCh:
 				openFileInConfigDir("tavily.conf")
 			case <-mGeminillmConf.ClickedCh:
 				openFileInConfigDir("gemini.conf")
-			case <-mGhllmConf.ClickedCh:
-				openFileInConfigDir("github.conf")
 			case <-mGroqllmConf.ClickedCh:
 				openFileInConfigDir("groq.conf")
+			case <-mOpenAIConf.ClickedCh:
+				openFileInConfigDir("openai.conf")
 
 				// Логи
-			case <-mMistralLog.ClickedCh:
-				openFileInConfigDir("mistral_err.log")
 			case <-mGeminillmLog.ClickedCh:
 				openFileInConfigDir("gemini_err.log")
-			case <-mGhllmLog.ClickedCh:
-				openFileInConfigDir("github_err.log")
 			case <-mGroqllmLog.ClickedCh:
 				openFileInConfigDir("groq_err.log")
+			case <-mOpenAILog.ClickedCh:
+				openFileInConfigDir("openai_err.log")
 			case <-mLog.ClickedCh:
 				openLogFile()
 
@@ -981,136 +1075,8 @@ func setupToggleHotkey() (chan struct{}, error) {
 	return ch, nil
 }
 
-func findWindowByPID(pid uint32) (syscall.Handle, bool) {
-	var hwnd syscall.Handle
-	var found bool
-
-	cb := syscall.NewCallback(func(h syscall.Handle, p uintptr) uintptr {
-		var processID uint32
-		getWindowThreadProcessId.Call(uintptr(h), uintptr(unsafe.Pointer(&processID)))
-		if processID == pid {
-			hwnd = h
-			found = true
-			return 0
-		}
-		return 1
-	})
-
-	enumWindows.Call(cb, 0)
-	return hwnd, found
-}
-
-func setupChatUIHotkey() {
-	if config.ChatUIHotkey == "" {
-		return
-	}
-	log.Printf("Attempting to register chat hotkey: %s", config.ChatUIHotkey)
-	mods, key, err := parseHotkey(config.ChatUIHotkey)
-	if err != nil {
-		log.Printf("WARNING: error parsing ChatUIHotkey: %v", err)
-		return
-	}
-	log.Printf("Parsing successful. Modifiers: %d, Key: %d", mods, key)
-	hk := hotkey.New([]hotkey.Modifier{hotkey.Modifier(mods)}, key)
-	if err := hk.Register(); err != nil {
-		log.Printf("WARNING: failed to register ChatUIHotkey: %v", err)
-		log.Printf("POSSIBLY THIS HOTKEY IS USED BY ANOTHER APPLICATION: %s", config.ChatUIHotkey)
-		return
-	}
-	go func() {
-		for range hk.Keydown() {
-			log.Printf("Chat hotkey triggered: %s", config.ChatUIHotkey)
-			toggleChatUI()
-		}
-	}()
-	log.Printf("SUCCESSFULLY registered chat hotkey: %s", config.ChatUIHotkey)
-}
-
-func toggleChatUI() {
-	chatUIMutex.Lock()
-	defer chatUIMutex.Unlock()
-
-	// 1. Поиск окна по заголовку
-	windowTitle := "ClipGen-m ChatUI" // Должен совпадать с Title в MainWindow chatui
-	titlePtr, _ := syscall.UTF16PtrFromString(windowTitle)
-	hwnd, _, _ := findWindow.Call(0, uintptr(unsafe.Pointer(titlePtr)))
-
-	// 2. Если окно найдено — закрываем его принудительно
-	if hwnd != 0 {
-		log.Println("[ChatUI] Окно найдено, закрываем процесс.")
-		// Отправляем сообщение WM_CLOSE для корректного закрытия
-		_, _, _ = sendMessageTimeoutW.Call(
-			hwnd,
-			WM_CLOSE,
-			0,
-			0,
-			SMTO_ABORTIFHUNG,
-			2000, // 2 секунды таймаут
-		)
-
-		// Ждем завершения процесса и очищаем переменную
-		if chatUIProcess != nil {
-			go func(p *os.Process) {
-				p.Wait()
-				chatUIMutex.Lock()
-				if chatUIProcess != nil && chatUIProcess.Pid == p.Pid {
-					log.Println("[Наблюдатель] Процесс ChatUI завершился.")
-					chatUIProcess = nil
-				}
-				chatUIMutex.Unlock()
-			}(chatUIProcess)
-		}
-		return
-	}
-
-	// 3. Если окно не найдено, проверяем состояние процесса
-	if chatUIProcess != nil {
-		// Если процесс жив, но окно не найдено, возможно оно еще создается или уже завершается
-		if err := chatUIProcess.Signal(syscall.Signal(0)); err == nil {
-			log.Println("[ChatUI] Процесс запущен, но окно еще не найдено (инициализация?)")
-			return
-		}
-		// Процесс мертв
-		chatUIProcess = nil
-	}
-
-	log.Println("[ChatUI] Окно не найдено. Запускаем процесс...")
-
-	executablePath := config.ChatUIPath
-	if !filepath.IsAbs(config.ChatUIPath) {
-		if resolvedPath, err := exec.LookPath(config.ChatUIPath); err == nil {
-			executablePath = resolvedPath
-		}
-	}
-
-	cmd := exec.Command(executablePath)
-
-	if err := cmd.Start(); err != nil {
-		log.Printf(" -> Ошибка запуска: %v", err)
-		return
-	}
-
-	chatUIProcess = cmd.Process
-	log.Printf(" -> Процесс успешно запущен (PID: %d)", chatUIProcess.Pid)
-
-	// Наблюдатель
-	go func(p *os.Process) {
-		p.Wait()
-		chatUIMutex.Lock()
-		if chatUIProcess != nil && chatUIProcess.Pid == p.Pid {
-			log.Println("[Наблюдатель] Процесс ChatUI завершился.")
-			chatUIProcess = nil
-		}
-		chatUIMutex.Unlock()
-	}(cmd.Process)
-}
-
 func restartApp() {
 	log.Println("Подготовка к перезагрузке...")
-
-	// Сначала убиваем чат, чтобы он не остался висеть "сиротой"
-	// и не конфликтовал с новой копией программы
-	killChatUI()
 
 	executable, _ := os.Executable()
 	cmd := exec.Command(executable)
@@ -1142,10 +1108,8 @@ func loadOrCreateConfig() error {
 		defaultConfig := `
 # --- СИСТЕМНЫЕ НАСТРОЙКИ ---
 editor_path: "notepad.exe"
-llm_path: "mistral.exe"
+llm_path: "geminillm.exe"
 app_toggle_hotkey: "Ctrl+F12"
-chatui_path: ".\\ClipGen-m-chatui.exe"
-chatui_hotkey: "Ctrl+M"
 system_prompt: |
   Вы работаете в Windows-утилите ClipGen-m, которая помогает отправлять запросы к ИИ-моделям через буфер обмена.
   Используйте табуляцию для разделения столбцов в таблицах, это необходимо для возможности вставки текста в Excel.

@@ -1,11 +1,11 @@
 # Tavily Test Utility
 
-This is a simple utility to test the Tavily API for web search functionality, used as part of the Mistral CLI tools.
+This is a simple utility to test the Tavily API for web search functionality, used as part of the LLM CLI tools.
 
 ## Setup
 
 1. Get your Tavily API key from [Tavily API](https://tavily.com/)
-2. Create a configuration file `tavily.conf` in the same directory as `mistral.conf` (usually in `%APPDATA%\clipgen-m\` on Windows)
+2. Create a configuration file `tavily.conf` in the application config directory (usually in `%APPDATA%\clipgen-m\` on Windows)
 3. Add your API key to the file in JSON format:
 
 ```json
@@ -47,7 +47,7 @@ go run main.go "What is the weather like in New York today?"
 
 ## Integration
 
-This utility is used as an integral part of the Mistral CLI tool for web search functionality. The Mistral CLI automatically handles search queries when appropriate and integrates search results into the conversation flow.
+This utility is used as an integral part of the LLM CLI tools for web search functionality. The CLI tools automatically handle search queries when appropriate and integrate search results into the conversation flow.
 
 ## Parameters
 

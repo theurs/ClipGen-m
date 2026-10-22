@@ -55,7 +55,7 @@ func getConfigPath() (string, error) {
 		_ = os.MkdirAll(clipgenDir, 0755)
 	}
 
-	// Return path to tavily.conf in the same directory as mistral.conf
+	// Return path to tavily.conf in the application config directory
 	return filepath.Join(clipgenDir, "tavily.conf"), nil
 }
 
@@ -90,7 +90,7 @@ func main() {
 	config, err := loadTavilyConfig()
 	if err != nil {
 		fmt.Printf("Error loading Tavily config: %v\n", err)
-		fmt.Println("Please create tavily.conf file in the same directory as mistral.conf with your API key(s)")
+		fmt.Println("Please create tavily.conf file in the application config directory with your API key(s)")
 		return
 	}
 

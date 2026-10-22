@@ -7,7 +7,7 @@
 
 ## Overview
 
-ClipGen-M is a powerful suite of utilities designed to interface with various Large Language Models (LLMs), including Mistral, Google Gemini, Groq. This project provides a unified command-line interface and a system-tray background service to bring AI capabilities directly to your Windows workflow.
+ClipGen-M is a powerful suite of utilities designed to interface with various Large Language Models (LLMs), including Google Gemini, Groq, and any OpenAI-compatible backend. This project provides a unified command-line interface and a system-tray background service to bring AI capabilities directly to your Windows workflow.
 
 ## Key Features
 
@@ -15,7 +15,6 @@ ClipGen-M is a powerful suite of utilities designed to interface with various La
 - **Multimedia Support**: Works out of the box with images, audio, PDFs, and plain text.
 - **Stateful Chats**: Built-in support for chat history and context retention.
 - **Automated Audio Conversion**: Seamlessly handles rare formats (like AMR) via ffmpeg integration.
-- **ChatUI**: A dedicated graphical interface for a more interactive chat experience.
 - **System Tray Integration**: Runs quietly in the background with a Windows system tray icon for quick access.
 - **AI-Enhanced Clipboard**: Automatically processes clipboard data using your preferred LLM.
 - **Customizable Hotkeys**: Boost productivity with global hotkeys tailored to your workflow.
@@ -24,10 +23,10 @@ ClipGen-M is a powerful suite of utilities designed to interface with various La
 ## Project Structure
 
 - `cmd/clipgen-m` – The main background application (System Tray).
-- `cmd/chatui` – The graphical user interface for interactive AI chatting.
 - `cmd/geminillm` – CLI utility for Google Gemini.
 - `cmd/groqllm` – CLI utility for Groq.
-- `cmd/mistral` – CLI utility for Mistral.
+- `cmd/openailike` – CLI utility for any OpenAI-compatible backend (OpenAI, Ollama, LM Studio, vLLM, OpenRouter).
+- `cmd/lua-executor` – Helper utility for precise calculations (Lua).
 
 ## Main Module: ClipGen-m (Clipboard Manager)
 
@@ -40,7 +39,7 @@ The core `clipgen-m` module is a Windows background service that lives in your s
 - **Selection Processing**: Process text currently selected in any application without overriding your clipboard.
 - **Clipboard OCR**: Extract text from images currently stored in the clipboard.
 - **Layout Switcher**: A "Punto Switcher" style feature to quickly fix text typed in the wrong keyboard layout (e.g., Russian vs. English).
-- **Multi-LLM Integration**: Switch between Mistral, Gemini, Copilot, Groq on the fly.
+- **Multi-LLM Integration**: Switch between Gemini, Groq, and any OpenAI-compatible backend on the fly.
 
 ### Supported Formats:
 
@@ -62,24 +61,6 @@ All LLM utilities support a standardized set of command-line flags (using either
 - `--save-key` – Securely save your API key.
 - `-chat` / `--chat-id` – Specify a unique chat session ID.
 
-## Chat Functionality
-
-ClipGen-m provides a robust chat experience through the integrated **ChatUI** and centralized chat management system.
-
-### Chat Features:
-
-- **Graphical Interface**: A clean UI with markdown support and message history.
-- **Session Management**: Create, save, and switch between multiple chat sessions.
-- **File Attachments**: Drop files and images directly into your conversation.
-- **Provider Switching**: Toggle between Mistral, Gemini, Groq Cloud within the same interface.
-- **Fine-grained Control**: Set specific temperatures and system prompts per chat.
-- **Context Persistence**: Full message history is preserved to maintain conversation flow.
-
-### Quick Access:
-
-- **Hotkey**: Press `Ctrl+M` (default) to toggle the chat window instantly.
-- **Clipboard Integration**: Send your current clipboard content straight into the chat with one click.
-
 ## Hotkeys and Actions
 
 ClipGen-m uses customizable global hotkeys to trigger AI actions. The following defaults are included:
@@ -97,7 +78,6 @@ ClipGen-m uses customizable global hotkeys to trigger AI actions. The following 
 ### App Management:
 
 - **Toggle Service**: `Ctrl+F12` – Enable or disable global hotkey processing.
-- **Open Chat**: `Ctrl+M` – Show or hide the ChatUI window.
 
 ### Customization:
 
@@ -137,10 +117,8 @@ Settings are stored in a YAML file located at `%APPDATA%\clipgen-m\config.yaml`.
 ```yaml
 # --- SYSTEM SETTINGS ---
 editor_path: "notepad.exe"                    # Editor for output
-llm_path: "mistral.exe"                      # Default LLM utility
+llm_path: "geminillm.exe"                   # Default LLM utility (any CLI from cmd/)
 app_toggle_hotkey: "Ctrl+F12"                # Toggle app on/off
-chatui_path: ".\\ClipGen-m-chatui.exe"       # Path to ChatUI binary
-chatui_hotkey: "Ctrl+M"                      # Toggle chat window
 system_prompt: |                             # Default instructions
   You are ClipGen-m, a Windows AI utility. 
   Use tabs for table columns (Excel-friendly). 
@@ -172,13 +150,14 @@ call build.bat
 
 Utilities accept input via `stdin` and support various data types depending on the specific model's API.
 
-- `mistral.exe`: Supports images, audio, text, and PDF (via OCR).
 - `geminillm.exe`: Supports images, audio, text, and PDF (via OCR).
+- `openailike.exe`: Works with any OpenAI-compatible backend; the API address is set in `openai.conf`.
 
 **CLI Examples:**
 ```cmd
-echo "Summarize this" | mistral.exe --system "Professional assistant" --temperature 0.3
-echo "Translate to French" | geminillm.exe --mode general
+echo "Summarize this" | geminillm.exe --system "Professional assistant" --temperature 0.3
+echo "Translate to French" | groqllm.exe --mode general
+echo "Hello" | openailike.exe --base-url http://localhost:11434/v1
 ```
 
 ## File Locations

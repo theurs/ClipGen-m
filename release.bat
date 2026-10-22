@@ -20,35 +20,6 @@ if !errorlevel! neq 0 (
 )
 cd ..\..
 
-echo Building chatui...
-cd cmd\chatui
-
-REM Prepare resources for chatui
-if exist rsrc.syso del rsrc.syso
-if exist internal\ui\chatui.ico del internal\ui\chatui.ico
-
-REM Build Windows resources (icon and manifest)
-rsrc -manifest main.manifest -ico chatui.ico -o rsrc.syso
-if !errorlevel! neq 0 (
-    echo Warning: rsrc failed to create resources, continuing build...
-)
-
-REM Copy icon for Go embed
-copy /Y chatui.ico internal\ui\chatui.ico >nul
-
-REM Build the executable
-go build -ldflags "-H=windowsgui -s -w" -o ..\..\dist\windows-amd64\ClipGen-m-chatui.exe
-if !errorlevel! neq 0 (
-    echo Error building chatui
-    exit /b !errorlevel!
-)
-
-REM Cleanup temporary files
-if exist rsrc.syso del rsrc.syso
-if exist internal\ui\chatui.ico del internal\ui\chatui.ico
-
-cd ..\..
-
 echo Building geminillm...
 cd cmd\geminillm
 go build -o ..\..\dist\windows-amd64\geminillm.exe
@@ -67,24 +38,24 @@ if !errorlevel! neq 0 (
 )
 cd ..\..
 
-
-echo Building mistral...
-cd cmd\mistral
-go build -o ..\..\dist\windows-amd64\mistral.exe
+echo Building openailike...
+cd cmd\openailike
+go build -o ..\..\dist\windows-amd64\openailike.exe
 if !errorlevel! neq 0 (
-    echo Error building mistral
+    echo Error building openailike
     exit /b !errorlevel!
 )
 cd ..\..
 
+
 echo Building lua-executor...
-cd cmd\mistral\lua-executor
-go build -o ..\..\..\dist\windows-amd64\lua-executor.exe
+cd cmd\lua-executor
+go build -o ..\..\dist\windows-amd64\lua-executor.exe
 if !errorlevel! neq 0 (
     echo Error building lua-executor
     exit /b !errorlevel!
 )
-cd ..\..\..
+cd ..\..
 
 REM Copy version file to build folder
 copy VERSION dist\windows-amd64\

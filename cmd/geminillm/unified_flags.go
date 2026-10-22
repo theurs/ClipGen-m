@@ -154,7 +154,7 @@ type GeminiResponse struct {
 	} `json:"error,omitempty"`
 }
 
-// --- Структуры Истории (совместимы с Mistral) ---
+// --- Структуры Истории (единый формат для всех LLM-утилит) ---
 
 type ChatMessageHistory struct {
 	Role      string      `json:"role"`
@@ -776,7 +776,7 @@ func requestGemini(apiKey, baseURL, model, system, prompt string, files []FileDa
 	return "", fmt.Errorf("exceeded max tool iterations")
 }
 
-// --- Утилиты (Копия логики Mistral для совместимости) ---
+// --- Утилиты (общие для всех LLM-утилит) ---
 
 func loadConfig(path string) (*Config, error) {
 	// Флаг необходимости перезаписи файла (если мы что-то исправили или заполнили)
@@ -1127,9 +1127,28 @@ func selectModelList(mode string, cfg *Config) []string {
 	return DefaultModels["general"]
 }
 
-func loadChatHistory(id string) (*ChatHistory, error) {
+// legacyChatsDirName — прежнее имя каталога истории чатов
+// (использовалось, когда основным LLM-провайдером был Mistral).
+const legacyChatsDirName = "mistral_chats"
+
+// chatsDir возвращает каталог, в котором хранится история чатов.
+// Для совместимости со старыми установками используется прежний каталог,
+// пока новый еще не создан (история не теряется).
+func chatsDir() string {
 	dir, _ := os.UserConfigDir()
-	path := filepath.Join(dir, ConfigDirName, "mistral_chats", id+".json")
+	appDir := filepath.Join(dir, ConfigDirName)
+	newDir := filepath.Join(appDir, "llm_chats")
+	if _, err := os.Stat(newDir); os.IsNotExist(err) {
+		legacyDir := filepath.Join(appDir, legacyChatsDirName)
+		if _, err := os.Stat(legacyDir); err == nil {
+			return legacyDir
+		}
+	}
+	return newDir
+}
+
+func loadChatHistory(id string) (*ChatHistory, error) {
+	path := filepath.Join(chatsDir(), id+".json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return &ChatHistory{ID: id}, nil
@@ -1147,8 +1166,7 @@ func saveHistory(id string, h *ChatHistory, user, assistant string, cfg *Config)
 		h.Messages = h.Messages[len(h.Messages)-cfg.ChatHistoryMaxMessages*2:]
 	}
 
-	dir, _ := os.UserConfigDir()
-	path := filepath.Join(dir, ConfigDirName, "mistral_chats", id+".json")
+	path := filepath.Join(chatsDir(), id+".json")
 	os.MkdirAll(filepath.Dir(path), 0755)
 	f, _ := os.Create(path)
 	json.NewEncoder(f).Encode(h)

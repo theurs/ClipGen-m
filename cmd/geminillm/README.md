@@ -2,7 +2,7 @@
 
 [Read this in Russian | Читать на русском](README_RU.md)
 
-A robust and flexible command-line interface for interacting with **Google Gemini** and **Gemma 3** models via the Google AI API. Fully integrated into the **ClipGen-m** ecosystem, this utility serves as a drop-in replacement for the Mistral CLI, allowing for a seamless transition between AI providers.
+A robust and flexible command-line interface for interacting with **Google Gemini** and **Gemma 3** models via the Google AI API. Fully integrated into the **ClipGen-m** ecosystem, this utility shares a unified command-line interface with the other LLM utilities, allowing for a seamless transition between AI providers.
 
 ## ✨ Features
 
@@ -10,7 +10,7 @@ A robust and flexible command-line interface for interacting with **Google Gemin
     *   *Note*: Some audio formats may have limited support in the Gemini API. The utility automatically detects unsupported formats (like `.amr`) and converts them to high-compatibility formats via `ffmpeg` before uploading.
 *   **Dual-Tool Integration (Gemini)**: Leverages the power of **Google Search** (for real-time information) and **Code Execution** (running Python in a secure sandbox for high-precision mathematical and logical tasks) simultaneously.
 *   **Gemma 3 Support**: Includes automated system prompt emulation for Gemma models, which do not natively support system instructions via the standard `generateContent` API.
-*   **Mistral-Compatible Chat History**: Uses the same unified storage structure (`mistral_chats`) as the Mistral CLI. This allows you to switch between Mistral and Gemini mid-conversation without losing your chat context.
+*   **Unified Chat History**: Uses the same storage structure (`llm_chats`) as the other ClipGen-m modules, so you can switch between providers mid-conversation without losing your chat context.
 *   **Smart Key Rotation**: Automatically shuffles your list of API keys on every launch to balance quota usage and avoid rate limits.
 *   **Windows-Optimized**: Specifically handles console encodings (CP866 to UTF-8) to ensure smooth piped input/output in CMD and PowerShell.
 
@@ -52,7 +52,7 @@ geminillm.exe -f "C:\Docs\invoice.pdf" -s "Extract the total due as a JSON objec
 ```
 
 ### 3. Stateful Chat (Shared History)
-Continue a conversation started with Mistral or another ClipGen-m module.
+Continue a conversation started in another ClipGen-m module.
 ```powershell
 echo "Hi, my name is Alex" | geminillm.exe -chat session_1
 echo "What is my name?" | geminillm.exe -chat session_1
@@ -91,7 +91,7 @@ echo "Calculate the factorial of 50 and multiply it by the square root of 12345"
 ## 📁 Storage & Logs
 *   **Config**: `%AppData%\clipgen-m\gemini.conf`
 *   **Error Logs**: `%AppData%\clipgen-m\gemini_err.log`
-*   **Chat History**: `%AppData%\clipgen-m\mistral_chats\` (Shared with other modules).
+*   **Chat History**: `%AppData%\clipgen-m\llm_chats\` (Shared with other modules).
 
 ---
 **Part of the ClipGen-m Project**
