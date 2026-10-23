@@ -276,11 +276,11 @@ func restoreClipboardAfterPaste(snapshot []ClipboardSnapshot, saved, pasted bool
 // ==========================================================
 
 type Config struct {
-	EditorPath      string    `yaml:"editor_path"`
-	LLMPath         string    `yaml:"llm_path"`
-	SystemPrompt    string    `yaml:"system_prompt"`
-	AppToggleHotkey string    `yaml:"app_toggle_hotkey"`
-	Actions         []Action  `yaml:"actions"`
+	EditorPath      string   `yaml:"editor_path"`
+	LLMPath         string   `yaml:"llm_path"`
+	SystemPrompt    string   `yaml:"system_prompt"`
+	AppToggleHotkey string   `yaml:"app_toggle_hotkey"`
+	Actions         []Action `yaml:"actions"`
 }
 
 type PTTConfig struct {
@@ -537,6 +537,53 @@ func init() {
 	}
 }
 
+// isPunctMark проверяет, меняется ли этот знак между RU и EN раскладками
+func isPunctMark(r rune) bool {
+	switch r {
+	case '.', ',', '/', '?', '@', '"', '#', '№', '$', ';', '^', ':', '&', '|':
+		return true
+	}
+	return false
+}
+
+// isRuLetterKey проверяет, является ли символ клавишей русской буквы на US-клавиатуре:
+// [ (х), ] (ъ), ; (ж), ' (э), , (б), . (ю), ` (ё)
+func isRuLetterKey(r rune) bool {
+	switch r {
+	case '[', ']', ';', '\'', ',', '.', '`',
+		'{', '}', ':', '"', '<', '>', '~':
+		return true
+	}
+	return false
+}
+
+// isEnclosingBracket проверяет парные скобки/кавычки вокруг слова ([ok], 'word', "text")
+func isEnclosingBracket(runes []rune, i int) bool {
+	r := runes[i]
+	var closeChar rune
+	switch r {
+	case '[':
+		closeChar = ']'
+	case '{':
+		closeChar = '}'
+	case '\'':
+		closeChar = '\''
+	case '"':
+		closeChar = '"'
+	default:
+		return false
+	}
+	for j := i + 1; j < len(runes); j++ {
+		if unicode.IsSpace(runes[j]) {
+			return false
+		}
+		if runes[j] == closeChar && (j+1 == len(runes) || unicode.IsSpace(runes[j+1])) {
+			return true
+		}
+	}
+	return false
+}
+
 /**
  * switchLayout переключает раскладку текста пословно.
  *
@@ -557,18 +604,49 @@ func switchLayout(text string) string {
 
 	for i := 0; i < len(runes); {
 		r := runes[i]
-		if !unicode.IsLetter(r) {
+
+		// Префикс команды перед кириллицей (.туц -> /new, "user -> @user, №tag -> #tag)
+		isCmdPrefix := isPunctMark(r) &&
+			(i == 0 || unicode.IsSpace(runes[i-1])) &&
+			(i+1 < len(runes) && unicode.Is(unicode.Cyrillic, runes[i+1]))
+
+		// Русская буква на знаковой клавише в начале слова ([jhjij -> хорошо, 'nj -> это)
+		isStartRuLetter := isRuLetterKey(r) && !isEnclosingBracket(runes, i) &&
+			(i == 0 || unicode.IsSpace(runes[i-1])) &&
+			(i+1 < len(runes) && unicode.Is(unicode.Latin, runes[i+1]))
+
+		if !unicode.IsLetter(r) && !isCmdPrefix && !isStartRuLetter {
 			// Разделитель (пробел, перевод строки, знак препинания, цифра) — оставляем как есть.
 			builder.WriteRune(r)
 			i++
 			continue
 		}
 
-		// Собираем слово — максимальную последовательность букв.
 		start := i
-		for i < len(runes) && unicode.IsLetter(runes[i]) {
+		if isCmdPrefix || isStartRuLetter {
 			i++
 		}
+
+		// Собираем буквы слова (включая русские буквы на знаковых клавишах внутри слова: yf[th, rjhj,rf, k.,jdm)
+		for i < len(runes) {
+			curr := runes[i]
+			if unicode.IsLetter(curr) {
+				i++
+			} else if isRuLetterKey(curr) && (i+1 < len(runes) && (unicode.IsLetter(runes[i+1]) || isRuLetterKey(runes[i+1]))) {
+				i++
+			} else {
+				break
+			}
+		}
+
+		// Захватываем прилипшие суффиксы (ыгку, -> sure?, ghbdtn? -> привет,)
+		for i < len(runes) && isPunctMark(runes[i]) {
+			if i+1 < len(runes) && unicode.IsLetter(runes[i+1]) {
+				break // Внутри составных слов (file.txt) не трогаем
+			}
+			i++
+		}
+
 		builder.WriteString(convertWord(runes[start:i]))
 	}
 
@@ -617,6 +695,17 @@ func convertRune(r rune, hasCyrillic, hasLatin bool) rune {
 		}
 		if converted, ok := engToRus[r]; ok {
 			return converted
+		}
+	default:
+		// Конвертируем прилипший префикс по направлению слова
+		if hasCyrillic && !hasLatin {
+			if converted, ok := rusToEng[r]; ok {
+				return converted
+			}
+		} else if hasLatin && !hasCyrillic {
+			if converted, ok := engToRus[r]; ok {
+				return converted
+			}
 		}
 	}
 	return r
