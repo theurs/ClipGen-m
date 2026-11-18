@@ -627,13 +627,24 @@ func switchLayout(text string) string {
 			i++
 		}
 
-		// Собираем буквы слова (включая русские буквы на знаковых клавишах внутри слова: yf[th, rjhj,rf, k.,jdm)
+		// Собираем буквы слова (включая русские буквы на знаковых клавишах: yf[th, cb[, rjhj,rf, k.,jdm)
 		for i < len(runes) {
 			curr := runes[i]
 			if unicode.IsLetter(curr) {
 				i++
-			} else if isRuLetterKey(curr) && (i+1 < len(runes) && (unicode.IsLetter(runes[i+1]) || isRuLetterKey(runes[i+1]))) {
-				i++
+			} else if isRuLetterKey(curr) {
+				// Не захватываем закрывающую парную скобку/кавычку (например, [ok] -> [щл])
+				if start > 0 && ((runes[start-1] == '[' && curr == ']') ||
+					(runes[start-1] == '{' && curr == '}') ||
+					(runes[start-1] == '\'' && curr == '\'') ||
+					(runes[start-1] == '"' && curr == '"')) {
+					break
+				}
+				if i+1 == len(runes) || !unicode.IsDigit(runes[i+1]) {
+					i++
+				} else {
+					break
+				}
 			} else {
 				break
 			}
