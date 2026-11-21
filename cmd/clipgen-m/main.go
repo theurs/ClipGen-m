@@ -2,10 +2,12 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/binary"
 	"fmt"
 	"image"
+	"image/jpeg"
 	"image/png"
 	"log"
 	"os"
@@ -14,6 +16,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unicode"
@@ -39,6 +42,7 @@ var (
 	user32   = syscall.NewLazyDLL("user32.dll")
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
 	shell32  = syscall.NewLazyDLL("shell32.dll")
+	ole32    = syscall.NewLazyDLL("ole32.dll")
 
 	openClipboard              = user32.NewProc("OpenClipboard")
 	closeClipboard             = user32.NewProc("CloseClipboard")
@@ -52,25 +56,39 @@ var (
 	setForegroundWindow        = user32.NewProc("SetForegroundWindow")
 
 	// Новые функции для управления видимостью
-	showWindow           = user32.NewProc("ShowWindow")
-	isWindowVisible      = user32.NewProc("IsWindowVisible")
-	enumClipboardFormats = user32.NewProc("EnumClipboardFormats")
-	emptyClipboard       = user32.NewProc("EmptyClipboard")
-	setClipboardData     = user32.NewProc("SetClipboardData")
-	globalAlloc          = kernel32.NewProc("GlobalAlloc")
-	globalFree           = kernel32.NewProc("GlobalFree")
-	memMove              = kernel32.NewProc("RtlMoveMemory")
+	enumClipboardFormats       = user32.NewProc("EnumClipboardFormats")
+	emptyClipboard             = user32.NewProc("EmptyClipboard")
+	setClipboardData           = user32.NewProc("SetClipboardData")
+	globalAlloc                = kernel32.NewProc("GlobalAlloc")
+	globalFree                 = kernel32.NewProc("GlobalFree")
+	memMove                    = kernel32.NewProc("RtlMoveMemory")
+	getClipboardOwner          = user32.NewProc("GetClipboardOwner")
+	getWindowThreadProcessId   = user32.NewProc("GetWindowThreadProcessId")
+	getClipboardFormatName     = user32.NewProc("GetClipboardFormatNameW")
+	addClipboardFormatListener = user32.NewProc("AddClipboardFormatListener")
+	createWindowEx             = user32.NewProc("CreateWindowExW")
+	defWindowProc              = user32.NewProc("DefWindowProcW")
+	registerClassEx            = user32.NewProc("RegisterClassExW")
+	getMessage                 = user32.NewProc("GetMessageW")
+	translateMessage           = user32.NewProc("TranslateMessage")
+	dispatchMessage            = user32.NewProc("DispatchMessageW")
+	getModuleHandle            = kernel32.NewProc("GetModuleHandleW")
+	openProcess                = kernel32.NewProc("OpenProcess")
+	closeHandle                = kernel32.NewProc("CloseHandle")
+	queryFullProcessImageName  = kernel32.NewProc("QueryFullProcessImageNameW")
+	shGetKnownFolderPath       = shell32.NewProc("SHGetKnownFolderPath")
+	coTaskMemFree              = ole32.NewProc("CoTaskMemFree")
 )
 
 const (
-	CF_HDROP      = 15
-	CF_DIB        = 8
-	MOD_NOREPEAT  = 0x4000
-	GMEM_MOVEABLE = 0x0002
-
-	// Константы для ShowWindow
-	SW_HIDE    = 0
-	SW_RESTORE = 9
+	CF_BITMAP                         = 2
+	CF_DIB                            = 8
+	CF_HDROP                          = 15
+	CF_DIBV5                          = 17
+	MOD_NOREPEAT                      = 0x4000
+	GMEM_MOVEABLE                     = 0x0002
+	WM_CLIPBOARDUPDATE                = 0x031D
+	PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 )
 
 // Тайминги локальной эмуляции клавиш и проверки буфера обмена.
@@ -280,15 +298,8 @@ type Config struct {
 	LLMPath         string   `yaml:"llm_path"`
 	SystemPrompt    string   `yaml:"system_prompt"`
 	AppToggleHotkey string   `yaml:"app_toggle_hotkey"`
+	SaveScreenshots bool     `yaml:"save_screenshots,omitempty"`
 	Actions         []Action `yaml:"actions"`
-}
-
-type PTTConfig struct {
-	Enabled      bool   `yaml:"enabled"`
-	Hotkey       string `yaml:"hotkey"`
-	LLMPath      string `yaml:"llm_path,omitempty"`
-	LLMArgs      string `yaml:"llm_args,omitempty"`
-	SystemPrompt string `yaml:"system_prompt,omitempty"`
 }
 
 type Action struct {
@@ -298,19 +309,6 @@ type Action struct {
 	LLMArgs    string `yaml:"llm_args,omitempty"`
 	InputType  string `yaml:"input_type"`
 	OutputMode string `yaml:"output_mode,omitempty"`
-
-	// MistralArgs — устаревший ключ конфига (Mistral LLM удален).
-	// Поддерживается только для обратной совместимости со старыми config.yaml.
-	MistralArgs string `yaml:"mistral_args,omitempty"`
-}
-
-// Args возвращает дополнительные аргументы запуска LLM-утилиты.
-// Приоритет у нового ключа llm_args, устаревший mistral_args используется как запасной.
-func (a Action) Args() string {
-	if a.LLMArgs != "" {
-		return a.LLMArgs
-	}
-	return a.MistralArgs
 }
 
 type HotkeyControl struct {
@@ -363,6 +361,7 @@ func onReady() {
 	}
 	setupTray()
 	go actionProcessor()
+	go startScreenshotWatcher()
 	enableHotkeys()
 }
 
@@ -449,8 +448,7 @@ func actionProcessor() {
 func handleAction(action Action) {
 	log.Printf("Запуск действия: %s [%s]", action.Name, action.InputType)
 
-	// Переключение раскладки — быстрый сценарий: работаем с выделенным текстом,
-	// бэкап буфера обмена там не нужен (он только создает блокировки и задержки).
+	// Переключение раскладки использует собственный быстрый цикл без иконки ожидания.
 	if action.InputType == "layout_switch" {
 		handleLayoutSwitch(action)
 		return
@@ -865,7 +863,7 @@ func processText(text string, action Action) (string, error) {
 	if pErr != nil {
 		return "", nil // User canceled
 	}
-	return runLLM(finalPrompt, nil, action.Args())
+	return runLLM(finalPrompt, nil, action.LLMArgs)
 }
 
 func processImage(imageBytes []byte, action Action) (string, error) {
@@ -884,7 +882,7 @@ func processImage(imageBytes []byte, action Action) (string, error) {
 	if pErr != nil {
 		return "", nil
 	}
-	return runLLM(finalPrompt, []string{tempFile}, action.Args())
+	return runLLM(finalPrompt, []string{tempFile}, action.LLMArgs)
 }
 
 func processFiles(files []string, action Action) (string, error) {
@@ -904,7 +902,7 @@ func processFiles(files []string, action Action) (string, error) {
 	if err != nil {
 		return "", nil
 	}
-	return runLLM(finalPrompt, finalFileList, action.Args())
+	return runLLM(finalPrompt, finalFileList, action.LLMArgs)
 }
 
 // ==========================================================
@@ -1132,6 +1130,7 @@ func setupTray() {
 	systray.SetTitle("ClipGen-m")
 
 	mToggle := systray.AddMenuItemCheckbox("Активен", "Включить/Выключить обработку клавиш", true)
+	mSaveScreenshots := systray.AddMenuItemCheckbox("Сохранять скриншоты", "Автоматически сохранять скриншоты в Загрузки", config.SaveScreenshots)
 
 	systray.AddSeparator()
 	mConfig := systray.AddMenuItem("Настройки (main)", "Редактировать config.yaml")
@@ -1168,6 +1167,21 @@ func setupTray() {
 					mToggle.Check()
 					log.Println("Приложение активировано пользователем (Menu).")
 					enableHotkeys()
+				}
+			// Обработка клика по галочке "Сохранять скриншоты"
+			case <-mSaveScreenshots.ClickedCh:
+				enabled := !mSaveScreenshots.Checked()
+				if enabled {
+					mSaveScreenshots.Check()
+					log.Println("Автосохранение скриншотов включено.")
+				} else {
+					mSaveScreenshots.Uncheck()
+					log.Println("Автосохранение скриншотов выключено.")
+				}
+				autoSaveScreenshots.Store(enabled)
+				config.SaveScreenshots = enabled
+				if err := saveScreenshotSetting(enabled); err != nil {
+					log.Printf("WARNING: не удалось сохранить настройку скриншотов: %v", err)
 				}
 			// Обработка хоткея включения/выключения
 			case <-toggleHotkeyCh:
@@ -1323,7 +1337,63 @@ actions:
 	if err != nil {
 		return err
 	}
-	return yaml.Unmarshal(data, &config)
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return err
+	}
+	autoSaveScreenshots.Store(config.SaveScreenshots)
+	return nil
+}
+
+func saveScreenshotSetting(enabled bool) error {
+	path, err := getConfigPath()
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return err
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return fmt.Errorf("неожиданная структура config.yaml")
+	}
+
+	valStr := "false"
+	if enabled {
+		valStr = "true"
+	}
+
+	root := doc.Content[0]
+	updated := false
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == "save_screenshots" {
+			root.Content[i+1].Kind = yaml.ScalarNode
+			root.Content[i+1].Tag = "!!bool"
+			root.Content[i+1].Value = valStr
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		root.Content = append(root.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "save_screenshots"},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: valStr},
+		)
+	}
+
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(&doc); err != nil {
+		return err
+	}
+	enc.Close()
+
+	return os.WriteFile(path, buf.Bytes(), 0644)
 }
 
 func loadIcons() {
@@ -1450,4 +1520,302 @@ func parseHotkey(hotkeyStr string) (uint32, hotkey.Key, error) {
 	}
 	log.Printf("Parsing completed successfully: modifiers=%d, key=%d", mods|MOD_NOREPEAT, key)
 	return mods | MOD_NOREPEAT, key, nil
+}
+
+// ==========================================================
+// AUTO-SAVE SCREENSHOTS
+// ==========================================================
+
+type wndClassExW struct {
+	cbSize        uint32
+	style         uint32
+	lpfnWndProc   uintptr
+	cbClsExtra    int32
+	cbWndExtra    int32
+	hInstance     uintptr
+	hIcon         uintptr
+	hCursor       uintptr
+	hbrBackground uintptr
+	lpszMenuName  *uint16
+	lpszClassName *uint16
+	hIconSm       uintptr
+}
+
+type winMsg struct {
+	hwnd    uintptr
+	message uint32
+	wParam  uintptr
+	lParam  uintptr
+	time    uint32
+	pt      struct{ x, y int32 }
+}
+
+type winGUID struct {
+	Data1 uint32
+	Data2 uint16
+	Data3 uint16
+	Data4 [8]byte
+}
+
+var (
+	screenshotEventCh   = make(chan struct{}, 4)
+	lastScreenshotHash  [32]byte
+	autoSaveScreenshots atomic.Bool
+)
+
+func startScreenshotWatcher() {
+	go screenshotWorker()
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	hInstance, _, _ := getModuleHandle.Call(0)
+	className, _ := syscall.UTF16PtrFromString("ClipGenClipboardWatcher")
+
+	wndProc := syscall.NewCallback(func(hwnd, msg, wParam, lParam uintptr) uintptr {
+		if msg == WM_CLIPBOARDUPDATE {
+			select {
+			case screenshotEventCh <- struct{}{}:
+			default:
+			}
+			return 0
+		}
+		r, _, _ := defWindowProc.Call(hwnd, msg, wParam, lParam)
+		return r
+	})
+
+	wc := wndClassExW{
+		cbSize:        uint32(unsafe.Sizeof(wndClassExW{})),
+		lpfnWndProc:   wndProc,
+		hInstance:     hInstance,
+		lpszClassName: className,
+	}
+	registerClassEx.Call(uintptr(unsafe.Pointer(&wc)))
+
+	hwndMessage := ^uintptr(2) // HWND_MESSAGE (-3)
+	hwnd, _, _ := createWindowEx.Call(
+		0,
+		uintptr(unsafe.Pointer(className)),
+		uintptr(unsafe.Pointer(className)),
+		0, 0, 0, 0, 0,
+		hwndMessage, 0, hInstance, 0,
+	)
+	if hwnd == 0 {
+		log.Println("WARNING: не удалось создать окно для отслеживания скриншотов")
+		return
+	}
+
+	r, _, _ := addClipboardFormatListener.Call(hwnd)
+	if r == 0 {
+		log.Println("WARNING: не удалось зарегистрировать AddClipboardFormatListener")
+		return
+	}
+
+	var msg winMsg
+	for {
+		ret, _, _ := getMessage.Call(uintptr(unsafe.Pointer(&msg)), 0, 0, 0)
+		if int32(ret) <= 0 {
+			break
+		}
+		translateMessage.Call(uintptr(unsafe.Pointer(&msg)))
+		dispatchMessage.Call(uintptr(unsafe.Pointer(&msg)))
+	}
+}
+
+func screenshotWorker() {
+	for range screenshotEventCh {
+		handleClipboardScreenshot()
+	}
+}
+
+func isClipboardScreenshot() bool {
+	// 1. Получаем владельца буфера обмена
+	ownerHwnd, _, _ := getClipboardOwner.Call()
+	var pid uint32
+	var exeName string
+	if ownerHwnd != 0 {
+		getWindowThreadProcessId.Call(ownerHwnd, uintptr(unsafe.Pointer(&pid)))
+		if pid == uint32(os.Getpid()) {
+			return false
+		}
+		exeName = strings.ToLower(getProcessExeName(pid))
+	}
+
+	// 2. Проверяем форматы в буфере
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	ok, err := tryOpenClipboard()
+	if !ok {
+		log.Printf("WARNING: проверка буфера для скриншота: %v", err)
+		return false
+	}
+	defer closeClipboard.Call()
+
+	hasImage := false
+	forbidden := ""
+	format := uint32(0)
+	var nameBuf [128]uint16
+	for {
+		res, _, _ := enumClipboardFormats.Call(uintptr(format))
+		format = uint32(res)
+		if format == 0 {
+			break
+		}
+		switch format {
+		case CF_BITMAP, CF_DIB, CF_DIBV5:
+			hasImage = true
+		case CF_HDROP:
+			forbidden = "CF_HDROP"
+		default:
+			if format >= 0xC000 {
+				n, _, _ := getClipboardFormatName.Call(uintptr(format), uintptr(unsafe.Pointer(&nameBuf[0])), uintptr(len(nameBuf)))
+				if n > 0 {
+					switch name := syscall.UTF16ToString(nameBuf[:n]); name {
+					case "PNG":
+						hasImage = true
+					case "HTML Format", "Rich Text Format":
+						forbidden = name
+					}
+				}
+			}
+		}
+	}
+
+	if !hasImage {
+		return false
+	}
+	if forbidden != "" {
+		log.Printf("Скриншот пропущен (формат: %s, владелец: %q)", forbidden, exeName)
+		return false
+	}
+	if ownerHwnd != 0 {
+		switch exeName {
+		case "snippingtool.exe", "screenclippinghost.exe", "shellexperiencehost.exe", "svchost.exe":
+			return true
+		default:
+			log.Printf("Скриншот пропущен (владелец: %q, pid: %d)", exeName, pid)
+			return false
+		}
+	}
+	return true
+}
+
+func getProcessExeName(pid uint32) string {
+	if pid == 0 {
+		return ""
+	}
+	hProc, _, _ := openProcess.Call(PROCESS_QUERY_LIMITED_INFORMATION, 0, uintptr(pid))
+	if hProc == 0 {
+		return ""
+	}
+	defer closeHandle.Call(hProc)
+
+	var buf [512]uint16
+	size := uint32(len(buf))
+	r, _, _ := queryFullProcessImageName.Call(hProc, 0, uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&size)))
+	if r == 0 || size == 0 {
+		return ""
+	}
+	return filepath.Base(syscall.UTF16ToString(buf[:size]))
+}
+
+func handleClipboardScreenshot() {
+	if !autoSaveScreenshots.Load() {
+		return
+	}
+	if !isClipboardScreenshot() {
+		return
+	}
+
+	imageBytes := clipboard.Read(clipboard.FmtImage)
+	if len(imageBytes) == 0 {
+		imageBytes, _ = getClipboardImageViaAPI()
+	}
+	if len(imageBytes) == 0 {
+		return
+	}
+
+	sum := sha256.Sum256(imageBytes)
+	if sum == lastScreenshotHash {
+		return
+	}
+
+	img, _, err := image.Decode(bytes.NewReader(imageBytes))
+	if err != nil {
+		return
+	}
+	lastScreenshotHash = sum
+
+	// Сжимаем в памяти в PNG (без потерь) и JPG (для фото), выбираем оптимальный вариант
+	var pngBuf, jpgBuf bytes.Buffer
+	pngErr := (&png.Encoder{CompressionLevel: png.BestCompression}).Encode(&pngBuf, img)
+	jpgErr := jpeg.Encode(&jpgBuf, img, &jpeg.Options{Quality: 75})
+
+	var ext string
+	var outBytes []byte
+	if pngErr == nil && jpgErr == nil {
+		if pngBuf.Len() > 150*1024 && pngBuf.Len() > jpgBuf.Len()*3 {
+			ext = ".jpg"
+			outBytes = jpgBuf.Bytes()
+		} else {
+			ext = ".png"
+			outBytes = pngBuf.Bytes()
+		}
+	} else if pngErr == nil {
+		ext = ".png"
+		outBytes = pngBuf.Bytes()
+	} else if jpgErr == nil {
+		ext = ".jpg"
+		outBytes = jpgBuf.Bytes()
+	} else {
+		return
+	}
+
+	dir, err := getDownloadsDir()
+	if err != nil {
+		log.Printf("WARNING: не удалось определить папку Загрузки: %v", err)
+		return
+	}
+
+	baseName := "screenshot_" + time.Now().Format("2006-01-02_15-04-05")
+	outPath := filepath.Join(dir, baseName+ext)
+	for i := 1; ; i++ {
+		if _, statErr := os.Stat(outPath); os.IsNotExist(statErr) {
+			break
+		}
+		outPath = filepath.Join(dir, fmt.Sprintf("%s_%d%s", baseName, i, ext))
+	}
+
+	if err := os.WriteFile(outPath, outBytes, 0644); err != nil {
+		log.Printf("WARNING: ошибка сохранения скриншота %s: %v", outPath, err)
+		return
+	}
+	log.Printf("Скриншот сохранен: %s (%d КБ)", outPath, len(outBytes)/1024)
+}
+
+func getDownloadsDir() (string, error) {
+	// FOLDERID_Downloads = {374DE290-123F-4565-9164-39C4925E467B}
+	folderID := winGUID{0x374DE290, 0x123F, 0x4565, [8]byte{0x91, 0x64, 0x39, 0xC4, 0x92, 0x5E, 0x46, 0x7B}}
+	var pszPath *uint16
+	hr, _, _ := shGetKnownFolderPath.Call(
+		uintptr(unsafe.Pointer(&folderID)),
+		0,
+		0,
+		uintptr(unsafe.Pointer(&pszPath)),
+	)
+	if hr == 0 && pszPath != nil {
+		defer coTaskMemFree.Call(uintptr(unsafe.Pointer(pszPath)))
+		slice := unsafe.Slice(pszPath, 32768)
+		path := syscall.UTF16ToString(slice)
+		if path != "" {
+			return path, nil
+		}
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, "Downloads"), nil
 }

@@ -31,7 +31,7 @@ Requires [Go](https://go.dev/dl/).
 2.  **Build from Source**:
     Navigate to the `cmd/groqllm` directory:
     ```bash
-    go build -o groqllm.exe main.go
+    go build -o groqllm.exe
     ```
 
 ## ⚙️ Configuration

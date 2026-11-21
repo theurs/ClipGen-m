@@ -12,26 +12,26 @@ import (
 
 // TavilySearchResponse represents the response from Tavily API
 type TavilySearchResponse struct {
-	Success    bool     `json:"success"`  // Some responses may include this
-	Error      string   `json:"error,omitempty"`
-	Query      string   `json:"query"`
-	Answer     string   `json:"answer"`
-	Result     string   `json:"result"`
-	Images     []string `json:"images,omitempty"`
-	Results    []struct {
-		URL       string  `json:"url"`
-		Title     string  `json:"title"`
-		Content   string  `json:"content"`
-		Score     float64 `json:"score"`
+	Success bool     `json:"success"` // Some responses may include this
+	Error   string   `json:"error,omitempty"`
+	Query   string   `json:"query"`
+	Answer  string   `json:"answer"`
+	Result  string   `json:"result"`
+	Images  []string `json:"images,omitempty"`
+	Results []struct {
+		URL        string  `json:"url"`
+		Title      string  `json:"title"`
+		Content    string  `json:"content"`
+		Score      float64 `json:"score"`
 		RawContent *string `json:"raw_content"`
-	} `json:"results"`  // This is the field used in the actual response
+	} `json:"results"` // This is the field used in the actual response
 	WebResults []struct {
 		Title     string `json:"title"`
 		URL       string `json:"url"`
 		Content   string `json:"content"`
 		Relevance string `json:"relevance"`
 	} `json:"web_results"`
-	RequestID string  `json:"request_id"`
+	RequestID    string  `json:"request_id"`
 	ResponseTime float64 `json:"response_time"`
 }
 
@@ -132,13 +132,13 @@ func main() {
 
 		// Prepare the request payload
 		payload := map[string]interface{}{
-			"api_key":           apiKey,
-			"query":             query,
-			"search_depth":      "basic", // or "advanced"
-			"include_images":    false,
-			"include_answer":    true,
+			"api_key":             apiKey,
+			"query":               query,
+			"search_depth":        "basic", // or "advanced"
+			"include_images":      false,
+			"include_answer":      true,
 			"include_raw_content": false,
-			"max_results":       5,
+			"max_results":         5,
 		}
 
 		// Convert payload to JSON
@@ -237,17 +237,6 @@ func main() {
 			fmt.Printf("All API keys failed without specific error\n")
 		}
 		return
-	}
-
-	// Print the results
-	fmt.Printf("Query: %s\n", searchResp.Query)
-	fmt.Printf("Answer: %s\n", searchResp.Answer)
-	fmt.Printf("Result: %s\n", searchResp.Result)
-	fmt.Printf("\nTop web results:\n")
-	for i, result := range searchResp.WebResults {
-		fmt.Printf("%d. %s\n", i+1, result.Title)
-		fmt.Printf("   URL: %s\n", result.URL)
-		fmt.Printf("   Content: %s\n\n", result.Content)
 	}
 }
 

@@ -1127,24 +1127,10 @@ func selectModelList(mode string, cfg *Config) []string {
 	return DefaultModels["general"]
 }
 
-// legacyChatsDirName — прежнее имя каталога истории чатов
-// (использовалось, когда основным LLM-провайдером был Mistral).
-const legacyChatsDirName = "mistral_chats"
-
 // chatsDir возвращает каталог, в котором хранится история чатов.
-// Для совместимости со старыми установками используется прежний каталог,
-// пока новый еще не создан (история не теряется).
 func chatsDir() string {
 	dir, _ := os.UserConfigDir()
-	appDir := filepath.Join(dir, ConfigDirName)
-	newDir := filepath.Join(appDir, "llm_chats")
-	if _, err := os.Stat(newDir); os.IsNotExist(err) {
-		legacyDir := filepath.Join(appDir, legacyChatsDirName)
-		if _, err := os.Stat(legacyDir); err == nil {
-			return legacyDir
-		}
-	}
-	return newDir
+	return filepath.Join(dir, ConfigDirName, "llm_chats")
 }
 
 func loadChatHistory(id string) (*ChatHistory, error) {

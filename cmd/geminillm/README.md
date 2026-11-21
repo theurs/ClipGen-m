@@ -23,7 +23,7 @@ Requires [Go 1.23+](https://go.dev/dl/).
 cd cmd/geminillm
 
 # Compile the binary
-go build -o geminillm.exe main.go
+go build -o geminillm.exe
 ```
 
 ## ⚙️ Configuration

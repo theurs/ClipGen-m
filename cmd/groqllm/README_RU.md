@@ -30,7 +30,7 @@
 2.  **Соберите проект**:
     Находясь в папке `cmd/groqllm`:
     ```bash
-    go build -o groqllm.exe main.go
+    go build -o groqllm.exe
     ```
 
 ## ⚙️ Настройка

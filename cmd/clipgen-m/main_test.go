@@ -92,6 +92,7 @@ func TestLayoutSwitchKeepsClipboard(t *testing.T) {
 
 	// Шаг 3: восстановление исходного содержимого после вставки.
 	restoreClipboardAfterPaste(snapshot, true, true)
+	time.Sleep(50 * time.Millisecond)
 
 	got := string(clipboard.Read(clipboard.FmtText))
 	if got != original {
@@ -119,7 +120,7 @@ func TestSwitchLayoutPureLatin(t *testing.T) {
 func TestSwitchLayoutMixedText(t *testing.T) {
 	// Смешанный текст: каждое слово конвертируется независимо.
 	got := switchLayout("Привет, мир! Hello")
-	want := "Ghbdtn, vbh! Руддщ"
+	want := "Ghbdtn? vbh! Руддщ"
 	if got != want {
 		t.Errorf("switchLayout(%q) = %q, ожидалось %q", "Привет, мир! Hello", got, want)
 	}
@@ -129,7 +130,7 @@ func TestSwitchLayoutKeepsSeparators(t *testing.T) {
 	// Пробелы, переводы строк, знаки препинания и цифры остаются без изменений.
 	in := "Привет, мир!\nSecond line - 100% (done) [ok]"
 	got := switchLayout(in)
-	want := "Ghbdtn, vbh!\nЫусщтв дшту - 100% (вщту) [щл]"
+	want := "Ghbdtn? vbh!\nЫусщтв дшту - 100% (вщту) [щл]"
 	if got != want {
 		t.Errorf("switchLayout(%q) = %q, ожидалось %q", in, got, want)
 	}

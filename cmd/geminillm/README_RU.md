@@ -20,7 +20,7 @@
 cd cmd/geminillm
 
 # Соберите исполняемый файл
-go build -o geminillm.exe main.go
+go build -o geminillm.exe
 ```
 
 ## ⚙️ Настройка
